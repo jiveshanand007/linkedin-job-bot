@@ -44,8 +44,8 @@
         </dependency>
         <dependency>
             <groupId>org.hibernate.orm</groupId>
-            <artifactId>hibernate-community-dialect</artifactId>
-            <version>6.4.0.Final</version>
+            <artifactId>hibernate-community-dialects</artifactId>
+            <version>6.3.1.Final</version>
         </dependency>
 
         <!-- Playwright -->
