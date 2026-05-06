@@ -8,7 +8,7 @@
 3. Applies to jobs automatically with tailored documents
 4. Tracks all applications with audit logs
 
-**Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3-5 ⏳  
+**Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3a ✅ Complete | Phase 3b+ ⏳  
 **Tech Stack:** Java 17, Spring Boot 3.2, SQLite, Playwright, Claude API  
 **Codebase:** 20 Java files
 
@@ -56,13 +56,16 @@ linkedin-job-bot/
 
 | Component | Files | Purpose |
 |-----------|-------|---------|
-| **Entities** | 5 Java files | Database models: UserConfig, Resume, Job, Application, AuditLog |
-| **Repositories** | 5 interfaces | JPA data access for all entities |
-| **LinkedInJobFetcher** | 1 service | Searches LinkedIn using Playwright (placeholder - Phase 2) |
+| **Entities** | 6 Java files | Database models: UserConfig, Resume, Job, Application, AuditLog, SearchConfig |
+| **Repositories** | 6 interfaces | JPA data access for all entities |
+| **LinkedInJobFetcher** | 1 service | Searches LinkedIn using Playwright (Phase 3a Complete) |
+| **PlaywrightSessionManager** | 1 helper | Browser lifecycle & LinkedIn login (Phase 3a) |
+| **JobParser** | 1 service | DOM-to-Job mapping (Phase 3a) |
 | **JobMatcher** | 1 service | Filters jobs by keywords, salary, blacklist |
 | **SchedulerService** | 1 service | Orchestrates the full job search→match→apply pipeline |
 | **ConfigController** | 1 controller | APIs for setup, resume upload, configuration |
 | **SchedulerController** | 1 controller | APIs for triggering job searches and scheduling |
+| **SearchConfigController** | 1 controller | REST CRUD for search filters (Phase 3a) |
 
 ---
 
@@ -80,8 +83,15 @@ linkedin-job-bot/
 - `ResumeController` — `POST /api/resumes/tailor?resumeId=1&jobId=5`
 - `SchedulerService` updated — auto-tailors for each matched job per run
 
-### ⏳ Phase 3: Application Submission (TODO)
-- LinkedInJobFetcher — real Playwright automation
+### ✅ Phase 3a: LinkedIn Job Fetching with Playwright (COMPLETE)
+- `PlaywrightSessionManager` — Browser lifecycle and LinkedIn login
+- `LinkedInJobFetcher` — Real Playwright automation with SearchConfig filters
+- `JobParser` — DOM extraction and salary normalization
+- `JobCardData` — Intermediate data structure
+- `SearchConfig` — JPA entity for per-user search preferences
+- `SearchConfigController` — REST CRUD endpoints for search filters
+
+### ⏳ Phase 3b: Application Submission (TODO)
 - ApplicationSubmitter — Easy Apply + external form filling
 
 ### ⏳ Phase 4: Full Automation (TODO)
@@ -225,6 +235,11 @@ See `plan.md` for detailed implementation plan.
 
 ## How to Use This Project
 
+### Install Playwright browser binaries (one-time setup)
+```bash
+mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="install chromium"
+```
+
 ### For Development
 1. Read `ARCHITECTURE.md` to understand the design
 2. Read `COMPONENTS.md` for detailed component descriptions
@@ -238,6 +253,7 @@ See `plan.md` for detailed implementation plan.
 4. Use curl or Postman to call `/api/config/setup` first
 
 ### For Continuing Development
+- Phase 1-3a complete — begin Phase 3b (ApplicationSubmitter)
 - Each phase builds on the previous one
 - Tests will be added in Phase 5
 - Refer to `plan.md` for detailed task breakdown

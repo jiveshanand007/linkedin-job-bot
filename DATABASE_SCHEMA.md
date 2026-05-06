@@ -8,7 +8,8 @@
 ## Entity Relationship Diagram
 
 ```
-UserConfig (1) ──┬──→ (Many) Resume
+UserConfig (1) ──┬──→ (1)    SearchConfig
+                 ├──→ (Many) Resume
                  ├──→ (Many) Job
                  └──→ (Many) AuditLog
 
@@ -20,6 +21,9 @@ Application
   ├─ job_id (FK → Job)
   ├─ resume_id (FK → Resume)
   └─ status, error_reason, generatedPdfPath, etc
+
+SearchConfig
+  └─ user_config_id (FK → UserConfig, UNIQUE)
 ```
 
 ---
@@ -60,6 +64,45 @@ auto_apply_enabled: false
 created_at: 2026-04-22 21:45:00
 updated_at: 2026-04-22 21:45:00
 ```
+
+---
+
+## Table: search_config
+
+Stores per-user job search filter preferences (Phase 3a).
+
+**Columns:**
+
+| Column | Type | Null | Notes |
+|--------|------|------|-------|
+| id | BIGINT | NO | Primary Key, Auto-increment |
+| user_config_id | BIGINT | NO | Unique Foreign Key → user_config.id |
+| remote_only | BOOLEAN | NO | Default: false (filter to remote jobs only) |
+| experience_level | TEXT | YES | ENTRY \| MID \| SENIOR \| DIRECTOR \| NULL = any |
+| date_posted_filter | TEXT | NO | Default: 'ANY' — PAST_DAY \| PAST_WEEK \| PAST_MONTH \| ANY |
+| max_pages | INTEGER | NO | Default: 3 — Max pages to fetch [1..10] |
+| created_at | TIMESTAMP | YES | Record creation time |
+| updated_at | TIMESTAMP | YES | Last update timestamp |
+
+**Constraints:**
+- Foreign Key: `user_config_id` → `user_config.id` (UNIQUE - one config per user)
+
+**Example Row:**
+```
+id: 1
+user_config_id: 1
+remote_only: true
+experience_level: MID
+date_posted_filter: PAST_WEEK
+max_pages: 5
+created_at: 2026-04-22 21:45:00
+updated_at: 2026-04-22 21:45:00
+```
+
+**Notes:**
+- One search_config per user (UNIQUE constraint on user_config_id)
+- Replaces LinkedInJobFetcher inline config logic with persistent storage
+- Used by LinkedInJobFetcher.searchJobs() to apply filters
 
 ---
 

@@ -329,7 +329,142 @@ curl -X POST "http://localhost:8080/api/resumes/tailor?resumeId=1&jobId=5"
 
 ---
 
-## Phase 3+ APIs (Not Yet Implemented)
+## Phase 3a APIs - Search Configuration
+
+### Create Search Config
+
+**Endpoint:** `POST /api/search-config`
+
+**Purpose:** Create or initialize search filters for a user
+
+**Request:**
+```bash
+curl -X POST http://localhost:8080/api/search-config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userConfigId": 1,
+    "remoteOnly": true,
+    "experienceLevel": "MID",
+    "datePostedFilter": "PAST_WEEK",
+    "maxPages": 5
+  }'
+```
+
+**Response (Success - 200):**
+```json
+{
+  "id": 1,
+  "userConfigId": 1,
+  "remoteOnly": true,
+  "experienceLevel": "MID",
+  "datePostedFilter": "PAST_WEEK",
+  "maxPages": 5,
+  "createdAt": "2026-04-22T21:45:00",
+  "updatedAt": "2026-04-22T21:45:00"
+}
+```
+
+**Fields:**
+- `userConfigId` (required) - User config ID
+- `remoteOnly` (optional) - Filter to remote jobs only (default: false)
+- `experienceLevel` (optional) - Filter by level: ENTRY | MID | SENIOR | DIRECTOR | null (any)
+- `datePostedFilter` (optional) - Filter by posting date: PAST_DAY | PAST_WEEK | PAST_MONTH | ANY (default: ANY)
+- `maxPages` (optional) - Maximum pages to fetch [1..10] (default: 3)
+
+---
+
+### Update Search Config
+
+**Endpoint:** `PUT /api/search-config/{id}`
+
+**Purpose:** Full-replace update of search configuration (null values reset to defaults)
+
+**Request:**
+```bash
+curl -X PUT http://localhost:8080/api/search-config/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "remoteOnly": false,
+    "experienceLevel": "SENIOR",
+    "datePostedFilter": "PAST_MONTH",
+    "maxPages": 3
+  }'
+```
+
+**Response (Success - 200):**
+```json
+{
+  "id": 1,
+  "userConfigId": 1,
+  "remoteOnly": false,
+  "experienceLevel": "SENIOR",
+  "datePostedFilter": "PAST_MONTH",
+  "maxPages": 3,
+  "updatedAt": "2026-04-22T22:00:00"
+}
+```
+
+**Notes:**
+- Any null fields are reset to defaults
+- userConfigId cannot be changed
+
+---
+
+### Get Search Config by User
+
+**Endpoint:** `GET /api/search-config/user/{userId}`
+
+**Purpose:** Retrieve search config for a specific user
+
+**Request:**
+```bash
+curl http://localhost:8080/api/search-config/user/1
+```
+
+**Response (Success - 200):**
+```json
+{
+  "id": 1,
+  "userConfigId": 1,
+  "remoteOnly": true,
+  "experienceLevel": "MID",
+  "datePostedFilter": "PAST_WEEK",
+  "maxPages": 5,
+  "createdAt": "2026-04-22T21:45:00",
+  "updatedAt": "2026-04-22T21:45:00"
+}
+```
+
+**Response (Not Found - 404):**
+```json
+{
+  "error": "Search config not found for user: 1"
+}
+```
+
+---
+
+### Delete Search Config
+
+**Endpoint:** `DELETE /api/search-config/{id}`
+
+**Purpose:** Delete a search configuration
+
+**Request:**
+```bash
+curl -X DELETE http://localhost:8080/api/search-config/1
+```
+
+**Response (Success - 204):** No content
+
+**Response (Not Found - 404):**
+```json
+{
+  "error": "Search config not found: 1"
+}
+```
+
+---
 
 ### Get Application History (Phase 4)
 ```

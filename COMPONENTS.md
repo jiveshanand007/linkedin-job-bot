@@ -8,7 +8,7 @@
 
 **Responsibility:** Search LinkedIn for jobs matching user criteria
 
-**Phase Status:** Phase 1 - Placeholder only (full implementation Phase 2)
+**Phase Status:** Phase 3a - ✅ COMPLETE (Playwright-based automation with SearchConfig integration)
 
 **Methods:**
 ```java
@@ -41,6 +41,186 @@ List<Job> searchJobs(UserConfig config, String keywords, int yearsMax, String lo
 **Dependencies:**
 - Playwright (browser automation)
 - UserConfig (credentials)
+
+---
+
+### 1b. PlaywrightSessionManager (Phase 3a - NEW)
+
+**File:** `src/main/java/com/jobbot/service/PlaywrightSessionManager.java`
+
+**Responsibility:** Manage browser lifecycle, LinkedIn login, and session state
+
+**Phase Status:** Phase 3a - ✅ COMPLETE
+
+**Methods:**
+```java
+void initialize() throws Exception
+void login(String email, String password) throws Exception
+BrowserContext getBrowserContext()
+void close()
+```
+
+**What It Does:**
+1. Initializes Playwright + Chromium browser
+2. Handles LinkedIn authentication
+3. Maintains session across multiple searches
+4. Gracefully closes browser on shutdown
+
+**Inputs:**
+- LinkedIn email and encrypted password (from UserConfig)
+
+**Outputs:**
+- Active BrowserContext for job searching
+- Maintains login state across operations
+
+**Dependencies:**
+- Playwright (browser automation)
+- UserConfig (credentials)
+
+---
+
+### 1c. JobParser (Phase 3a - NEW)
+
+**File:** `src/main/java/com/jobbot/service/JobParser.java`
+
+**Responsibility:** Stateless parsing of DOM elements to Job entities
+
+**Phase Status:** Phase 3a - ✅ COMPLETE
+
+**Methods:**
+```java
+Job parseJobCard(JobCardData cardData)
+String normalizeSalary(String salaryText) // returns salary in LPA
+```
+
+**What It Does:**
+1. Accepts JobCardData (extracted from LinkedIn DOM)
+2. Maps DOM elements to Job entity fields
+3. Normalizes salary (e.g., "₹35,00,000" → 35 LPA)
+4. Detects application type (Easy Apply vs external)
+5. Returns fully formed Job object
+
+**Dependencies:**
+- JobCardData (intermediate data structure)
+
+---
+
+### 1d. JobCardData (Phase 3a - NEW)
+
+**File:** `src/main/java/com/jobbot/entity/JobCardData.java`
+
+**Responsibility:** Plain Java record representing raw DOM extraction
+
+**Phase Status:** Phase 3a - ✅ COMPLETE
+
+**Fields:**
+```java
+record JobCardData(
+    String linkedInJobId,
+    String title,
+    String company,
+    String salaryText,
+    String description,
+    String applicationType, // "easy_apply" or "external"
+    String url,
+    String location
+)
+```
+
+**Purpose:**
+- Boundary between Playwright/DOM extraction and JobParser
+- Immutable, serializable
+- Makes DOM extraction logic independent of Job entity
+
+**Dependencies:**
+- None (no database dependencies)
+
+---
+
+### 1e. SearchConfig (Phase 3a - NEW)
+
+**File:** `src/main/java/com/jobbot/entity/SearchConfig.java`
+
+**Responsibility:** JPA entity for per-user job search filters
+
+**Phase Status:** Phase 3a - ✅ COMPLETE
+
+**Fields:**
+```java
+@Entity
+public class SearchConfig {
+    @Id
+    @GeneratedValue
+    private Long id;
+    
+    @OneToOne
+    @JoinColumn(name = "user_config_id", unique = true)
+    private UserConfig userConfig;
+    
+    @Column(columnDefinition = "BOOLEAN DEFAULT false")
+    private Boolean remoteOnly;
+    
+    @Column(columnDefinition = "TEXT")
+    private String experienceLevel; // ENTRY, MID, SENIOR, DIRECTOR, NULL
+    
+    @Column(columnDefinition = "TEXT DEFAULT 'ANY'")
+    private String datePostedFilter; // PAST_DAY, PAST_WEEK, PAST_MONTH, ANY
+    
+    @Column(columnDefinition = "INTEGER DEFAULT 3")
+    private Integer maxPages; // [1..10]
+    
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+}
+```
+
+**Dependencies:**
+- UserConfig (1-to-1 relationship)
+
+---
+
+### 1f. SearchConfigController (Phase 3a - NEW)
+
+**File:** `src/main/java/com/jobbot/controller/SearchConfigController.java`
+
+**Responsibility:** REST CRUD endpoints for SearchConfig
+
+**Phase Status:** Phase 3a - ✅ COMPLETE
+
+**Endpoints:**
+```
+POST   /api/search-config              Create search config for user
+PUT    /api/search-config/{id}         Full-replace update (null = reset to default)
+GET    /api/search-config/user/{id}    Get search config by user ID
+DELETE /api/search-config/{id}         Delete search config
+```
+
+**Example Request/Response:**
+```json
+POST /api/search-config
+{
+  "userConfigId": 1,
+  "remoteOnly": true,
+  "experienceLevel": "MID",
+  "datePostedFilter": "PAST_WEEK",
+  "maxPages": 5
+}
+
+Response (200):
+{
+  "id": 1,
+  "userConfigId": 1,
+  "remoteOnly": true,
+  "experienceLevel": "MID",
+  "datePostedFilter": "PAST_WEEK",
+  "maxPages": 5,
+  "createdAt": "2026-04-22T21:45:00"
+}
+```
+
+**Dependencies:**
+- SearchConfigRepository
+- UserConfigRepository
 
 ---
 
@@ -374,7 +554,11 @@ save(AuditLog)
 
 | Component | Phase | Status | Purpose |
 |-----------|-------|--------|---------|
-| LinkedInJobFetcher | 3 | Stub | Search LinkedIn |
+| LinkedInJobFetcher | 3a | ✅ Complete | Search LinkedIn |
+| PlaywrightSessionManager | 3a | ✅ Complete | Browser lifecycle & login |
+| JobParser | 3a | ✅ Complete | DOM-to-Job mapping |
+| SearchConfig | 3a | ✅ Complete | Per-user search filters |
+| SearchConfigController | 3a | ✅ Complete | Search config CRUD API |
 | JobMatcher | 1 | ✅ Complete | Filter jobs |
 | SchedulerService | 1,2 | ✅ Updated | Orchestrate pipeline |
 | ClaudeApiClient | 2 | ✅ Complete | Anthropic API HTTP client |
