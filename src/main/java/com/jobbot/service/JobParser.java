@@ -21,8 +21,8 @@ public class JobParser {
     // Salary regex patterns (tried in order)
     private static final Pattern INR_RANGE  = Pattern.compile("([\\d.]+)\\s*[\\u2013\\-to]+\\s*([\\d.]+)\\s*LPA", Pattern.CASE_INSENSITIVE);
     private static final Pattern INR_SINGLE = Pattern.compile("([\\d.]+)\\s*LPA", Pattern.CASE_INSENSITIVE);
-    private static final Pattern USD_RANGE  = Pattern.compile("\\$([\\d,]+)[Kk]?\\s*[\\u2013\\-]\\s*\\$([\\d,]+)[Kk]?");
-    private static final Pattern USD_SINGLE = Pattern.compile("\\$([\\d,]+)[Kk]?");
+    private static final Pattern USD_RANGE  = Pattern.compile("\\$([\\d,]+[Kk]?)\\s*[\\u2013\\-]\\s*\\$([\\d,]+[Kk]?)");
+    private static final Pattern USD_SINGLE = Pattern.compile("\\$([\\d,]+[Kk]?)");
 
     /**
      * Maps a JobCardData (plain strings from the DOM) to a Job entity.
@@ -94,12 +94,12 @@ public class JobParser {
         return null;
     }
 
-    // Strips commas; if value < 1000, treat as K units (e.g. "90" from "$90K" → 90000)
+    // Strips commas; multiplies by 1000 if K/k suffix present in captured string
     private double parseUsdValue(String raw) {
-        String cleaned = raw.replace(",", "");
+        boolean hasK = raw.toLowerCase().endsWith("k");
+        String cleaned = raw.replace(",", "").replaceAll("[Kk]$", "");
         double val = Double.parseDouble(cleaned);
-        if (val < 1000) val *= 1000;
-        return val;
+        return hasK ? val * 1000 : val;
     }
 
     private boolean isBlank(String s) {
