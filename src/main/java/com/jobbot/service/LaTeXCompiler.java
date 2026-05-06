@@ -64,7 +64,7 @@ public class LaTeXCompiler {
             logger.info("Copying PDF to {}", outputPdf);
             Files.copy(generatedPdf, outputPdf, StandardCopyOption.REPLACE_EXISTING);
 
-            return outputDir + "/resume_job_" + jobId + ".pdf";
+            return outputPdf.toAbsolutePath().toString();
 
         } catch (IOException e) {
             throw new LaTeXCompilationException("Failed to start pdflatex", e);
