@@ -46,9 +46,7 @@ public class SchedulerService {
 
             logger.info("Starting job search for user: {}", userId);
 
-            List<Job> fetchedJobs = jobFetcher.searchJobs(
-                config, config.getJobKeywords(), config.getYearsExperienceMax(), config.getLocation()
-            );
+            List<Job> fetchedJobs = jobFetcher.fetchJobs(config);
 
             List<Job> matchedJobs = jobMatcher.filterJobs(fetchedJobs, config);
             matchedJobs.forEach(jobRepository::save);

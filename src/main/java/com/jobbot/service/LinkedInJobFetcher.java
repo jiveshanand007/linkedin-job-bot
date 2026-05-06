@@ -140,7 +140,7 @@ public class LinkedInJobFetcher {
             if (fE > 0) url.append("&f_E=").append(fE);
         }
 
-        if (!"ANY".equalsIgnoreCase(datePostedFilter) && datePostedFilter != null) {
+        if (!"ANY".equalsIgnoreCase(datePostedFilter)) {
             url.append("&f_TPR=").append(mapDatePostedFilter(datePostedFilter));
         }
 
