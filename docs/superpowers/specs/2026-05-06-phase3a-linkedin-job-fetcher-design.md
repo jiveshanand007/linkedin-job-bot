@@ -18,7 +18,7 @@
 |---|---|---|
 | `PlaywrightSessionManager` | Plain Java class (NOT a Spring bean) — instantiated fresh per `fetchJobs` call by `LinkedInJobFetcher`. Owns browser open/close and LinkedIn login within a single run. | `Page createSession(linkedInEmail, password)` / `void closeSession()` |
 | `LinkedInJobFetcher` | Orchestrates: gets session from manager, loops search pages, delegates card parsing to `JobParser`, returns unsaved `List<Job>`, always closes session in `finally`. | `List<Job> fetchJobs(UserConfig)` |
-| `JobParser` | Stateless. Two public methods: `parseCard(Locator card, String jobDescription)` → `Optional<Job>`, and `extractSalary(String text)` → `Integer`. No browser knowledge. | Pure mapping logic |
+| `JobParser` | Stateless `@Component`. No Playwright dependency — receives pre-extracted data as a plain `JobCardData` record (no `Locator`, no `Page`). Two public methods: `parseCard(JobCardData)` → `Optional<Job>`, and `extractSalary(String text)` → `Integer`. | Pure string/regex logic only |
 | `SearchConfig` | JPA entity: per-user extra search filters (`remoteOnly`, `experienceLevel`, `datePostedFilter`, `maxPages`). Keywords and location are read from `UserConfig` directly — no duplication. | — |
 | `SearchConfigController` | REST CRUD so users can configure search filters before running scheduler. | POST/PUT/GET/DELETE |
 
@@ -70,7 +70,8 @@ Params:
   location     → UserConfig.location                        ← from UserConfig, not SearchConfig
   f_WT=2       → SearchConfig.remoteOnly=true (omitted if false)
   f_E=<value>  → SearchConfig.experienceLevel mapping:
-                   ENTRY=2, MID=4, SENIOR=4, DIRECTOR=5    ← LinkedIn API values (not 1/3/4/5)
+                   ENTRY=2, MID=4, SENIOR=4, DIRECTOR=5
+                   MID and SENIOR intentionally share value 4 (LinkedIn's "Mid-Senior level")
                    null → param omitted (any level)
   f_TPR=r86400 → PAST_DAY; r604800=PAST_WEEK; r2592000=PAST_MONTH; omitted=ANY
   start=N      → pagination: N = pageIndex * 25, pageIndex ∈ [0, maxPages-1]
@@ -94,48 +95,78 @@ LinkedInJobFetcher.fetchJobs(userConfig):
          b. waitForSelector(".job-card-container", timeout=8s)
             → timeout: log warning, break loop
          c. for each card Locator:
-              i.  click card to load detail panel
-              ii. waitForSelector(".job-description__container", timeout=5s)
-                  → timeout: log warning, set description = "", continue
-              iii.String description = page.locator(".job-description__container").innerText()
-              iv. Optional<Job> job = jobParser.parseCard(card, description)
-              v.  if present: set job.setUserConfig(userConfig); job.setExtractedAt(LocalDateTime.now())
-              vi. job.ifPresent(collected::add)
+              try {
+                i.   Extract DOM strings from card Locator:
+                       String jobId   = card.getAttribute("data-job-id")
+                       String title   = card.locator(".job-card-list__title").innerText()
+                       String company = card.locator(".job-card-container__company-name").innerText()
+                       String loc     = card.locator(".job-card-container__metadata-item").first().innerText()
+                       String url     = card.locator("a.job-card-list__title").getAttribute("href")
+                       String applyMethod = card.locator(".job-card-container__apply-method").innerText()
+                ii.  click card to load detail panel
+                     waitForSelector(".job-description__container", timeout=5s)
+                     → timeout: set description = ""
+                     String description = page.locator(".job-description__container").innerText()
+                iii. JobCardData data = new JobCardData(jobId, title, company, loc, url, applyMethod, description)
+                iv.  Optional<Job> job = jobParser.parseCard(data)
+                v.   if present: set job.setUserConfig(userConfig); job.setExtractedAt(LocalDateTime.now())
+                vi.  job.ifPresent(collected::add)
+              } catch (Exception e) {
+                log.warn("Skipping card due to parse error: {}", e.getMessage())
+                // continue to next card
+              }
      } finally {
        session.closeSession()
      }
-  5. Pre-save dedup: fetch existing linkedInJobIds for this user in one query:
+  5. Within-batch dedup: dedupe collected list by linkedInJobId (preserve first occurrence):
+       Map<String,Job> seen = new LinkedHashMap<>()
+       collected.forEach(j -> seen.putIfAbsent(j.getLinkedInJobId(), j))
+       List<Job> dedupedBatch = new ArrayList<>(seen.values())
+  6. Cross-run dedup: remove jobs already in DB:
        Set<String> existing = jobRepository.findLinkedInJobIdsByUserConfig(userConfig)
-       List<Job> newJobs = collected.stream()
+       List<Job> newJobs = dedupedBatch.stream()
          .filter(j -> !existing.contains(j.getLinkedInJobId()))
          .toList()
-  6. Return newJobs  ← unsaved; SchedulerService runs matcher then saves matched jobs
+  7. Return newJobs  ← unsaved; SchedulerService runs matcher then saves matched jobs
 ```
 
 **Persistence ownership:**
 - `LinkedInJobFetcher` returns unsaved `List<Job>` — it does **not** call `jobRepository.save()`.
 - `SchedulerService` flow is unchanged: `jobMatcher.filterJobs(fetched, config)` → `jobRepository.save()` per matched job.
-- Dedup is done in step 5 (pre-save lookup). No reliance on constraint exceptions.
+- Dedup is done in two steps: (5) within-batch via `LinkedHashMap`, (6) cross-run via DB lookup. No reliance on constraint exceptions.
 - New repository method required: `Set<String> findLinkedInJobIdsByUserConfig(UserConfig)` — added to `JobRepository`.
 
 ---
 
 ## JobParser
 
-Stateless `@Component`. Two public methods, no browser dependencies.
+Stateless `@Component`. Zero Playwright imports — depends only on the `JobCardData` record and `Job` entity.
 
-**`Optional<Job> parseCard(Locator card, String jobDescription)`**
+**`JobCardData` record** (plain Java record, no Playwright types):
+```java
+record JobCardData(
+    String linkedInJobId,
+    String title,
+    String company,
+    String location,
+    String url,
+    String applyMethod,    // raw text from DOM, e.g. "Easy Apply" or empty
+    String jobDescription  // full text from detail panel, may be empty string
+)
+```
 
-| Field | DOM Selector | Fallback |
+**`Optional<Job> parseCard(JobCardData data)`**
+
+| Field | Source | Fallback |
 |---|---|---|
-| `linkedInJobId` | `data-job-id` attribute on card root element | return `Optional.empty()` (required) |
-| `title` | `.job-card-list__title` inner text | return `Optional.empty()` (required) |
-| `company` | `.job-card-container__company-name` | `"Unknown"` |
-| `location` | `.job-card-container__metadata-item` (first match) | `""` |
-| `url` | `href` of `a.job-card-list__title` | `""` |
-| `applicationType` | `.job-card-container__apply-method` text contains "Easy Apply" → `"EASY_APPLY"` | `"EXTERNAL"` |
-| `jobDescription` | passed-in `jobDescription` String directly | `""` |
-| `salary` | `extractSalary(jobDescription)` — see below | `null` |
+| `linkedInJobId` | `data.linkedInJobId()` | return `Optional.empty()` if blank (required) |
+| `title` | `data.title()` | return `Optional.empty()` if blank (required) |
+| `company` | `data.company()` | `"Unknown"` if blank |
+| `location` | `data.location()` | `""` if blank |
+| `url` | `data.url()` | `""` if blank |
+| `applicationType` | `data.applyMethod().contains("Easy Apply")` → `"EASY_APPLY"` | `"EXTERNAL"` |
+| `jobDescription` | `data.jobDescription()` | `""` if blank |
+| `salary` | `extractSalary(data.jobDescription())` | `null` |
 
 **`Integer extractSalary(String text)`**
 
@@ -177,7 +208,8 @@ public class SearchConfig {
     private String experienceLevel; // ENTRY | MID | SENIOR | DIRECTOR | null = any
 
     @Column
-    private String datePostedFilter; // PAST_DAY | PAST_WEEK | PAST_MONTH | ANY (default ANY)
+    private String datePostedFilter = "ANY"; // PAST_DAY | PAST_WEEK | PAST_MONTH | ANY
+                                              // null treated as "ANY" (f_TPR param omitted)
 
     @Column
     private Integer maxPages = 3;   // [1..10]; 3 → up to 75 results per run
@@ -203,7 +235,9 @@ public class SearchConfig {
 
 ### SearchConfig Endpoints
 
-`SearchConfig` is optional. If absent the fetcher runs with default filters: `remoteOnly=false`, `experienceLevel=null` (any), `datePostedFilter=ANY`, `maxPages=3`.
+`SearchConfig` is optional. If absent the fetcher runs with default filters: `remoteOnly=false`, `experienceLevel=null` (any), `datePostedFilter="ANY"`, `maxPages=3`.
+
+**DTO strategy:** Request/response uses JPA entities directly — same pattern as existing `ConfigController`. No separate DTO classes. `userConfigId` is a Long in the request body; controller calls `userConfigRepository.findById(userConfigId)` to resolve the `UserConfig` FK before saving. `createdAt`/`updatedAt` are set by the controller on create/update respectively.
 
 ```
 POST   /api/search-config
@@ -233,6 +267,7 @@ Response 204 No Content | 404 if not found
 
 | File | Purpose |
 |---|---|
+| `entity/JobCardData.java` | Plain Java record — bridge between scrape loop and JobParser, no Playwright types |
 | `entity/SearchConfig.java` | New JPA entity |
 | `repository/SearchConfigRepository.java` | `Optional<SearchConfig> findByUserConfig(UserConfig)` |
 | `repository/JobRepository.java` | Add `@Query` method: `Set<String> findLinkedInJobIdsByUserConfig(UserConfig)` |
@@ -249,6 +284,7 @@ Response 204 No Content | 404 if not found
 |---|---|
 | `pom.xml` | No change — Playwright 1.40.0 already present |
 | `service/SchedulerService.java` | Change `searchJobs(config, keywords, years, location)` → `fetchJobs(config)` (one line) |
+| `README.md` | Add Playwright browser install command to setup instructions |
 
 ---
 
@@ -258,9 +294,9 @@ Response 204 No Content | 404 if not found
 |---|---|
 | Login failure / CAPTCHA | Log error, skip user, continue scheduler |
 | Page navigation timeout | Log warning, save collected jobs, return |
-| Card parse exception | Log warning, skip card, continue |
-| No SearchConfig for user | Run with defaults: remoteOnly=false, experienceLevel=any, datePostedFilter=ANY, maxPages=3 |
-| Duplicate job (pre-save lookup) | Filtered out in step 5 via `findLinkedInJobIdsByUserConfig` — no DB exceptions |
+| Card DOM extraction or parse error | Per-card `try/catch` — log warning, skip card, continue loop |
+| Within-batch duplicate (same job on multiple pages) | Deduped in step 5 via `LinkedHashMap` keyed on `linkedInJobId` |
+| Duplicate job (pre-save lookup) | Filtered out in step 6 via `findLinkedInJobIdsByUserConfig` — no DB exceptions |
 
 ---
 
