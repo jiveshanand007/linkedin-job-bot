@@ -31,7 +31,7 @@
 │  └────────────┬──────────────────────────┘   │                │
 │               │ SQL Queries                  │                │
 │  ┌────────────▼──────────────────────────┐   │                │
-│  │ SQLite Database                      │   │                │
+│  │ PostgreSQL Database                  │   │                │
 │  │  - user_config                       │   │                │
 │  │  - resumes                           │   │                │
 │  │  - jobs                              │   │                │
@@ -75,7 +75,7 @@ SchedulerService.executeRun(userId)
     │   └─ Skip already-applied jobs → Filtered List<Job>
     │
     ├─→ JobRepository.saveAll(matchedJobs)
-    │   └─ Persist to SQLite
+    │   └─ Persist to PostgreSQL
     │
     └─→ Return result { jobsFetched, jobsMatched, etc }
     ↓
@@ -136,7 +136,7 @@ Quartz Scheduler
 - Unit tests for each service
 - Integration tests for API endpoints
 - Deploy to Railway/Render
-- Database migration (SQLite → PostgreSQL if needed)
+- Database: PostgreSQL
 
 ---
 

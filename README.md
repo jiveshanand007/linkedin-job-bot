@@ -9,7 +9,7 @@
 4. Tracks all applications with audit logs
 
 **Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3a ✅ Complete | Phase 3b ✅ Complete | Phase 4 ✅ Complete  
-**Tech Stack:** Java 17, Spring Boot 3.2, SQLite, Playwright, Claude API  
+**Tech Stack:** Java 17, Spring Boot 3.2, PostgreSQL, Playwright, Claude API  
 **Codebase:** 20+ Java files  
 **Dependencies:** pdflatex required — Linux: `sudo apt install texlive-latex-base` | macOS: `brew install --cask mactex`
 
@@ -213,7 +213,7 @@ export CLAUDE_API_KEY=sk-ant-xxxxx
 Optional (configured in application.properties):
 ```bash
 server.port=8080
-spring.datasource.url=jdbc:sqlite:jobbot.db
+spring.datasource.url=jdbc:postgresql://localhost:5432/jobbot
 ```
 
 ---
@@ -224,8 +224,8 @@ spring.datasource.url=jdbc:sqlite:jobbot.db
 |-----------|---------|---------|
 | Spring Boot | 3.2.0 | Web framework & auto-config |
 | Spring Data JPA | - | Database ORM |
-| SQLite | 3.44.0 | Database |
-| Hibernate (Community Dialect) | 6.4.0 | SQLite dialect |
+| PostgreSQL | 42.x | Database |
+| Hibernate | - | PostgreSQL dialect |
 | Playwright | 1.40.0 | Browser automation |
 | Quartz | - | Job scheduling |
 | Jackson | - | JSON serialization |

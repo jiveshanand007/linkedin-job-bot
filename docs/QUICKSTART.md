@@ -185,7 +185,7 @@ Render it at [plantuml.com/plantuml](https://www.plantuml.com/plantuml) or with 
 POST /api/scheduler/run?userId=1
         │
         ▼
-1. Load UserConfig from SQLite
+1. Load UserConfig from PostgreSQL
         │
         ▼
 2. LinkedIn Scrape (Playwright headless)
@@ -196,11 +196,11 @@ POST /api/scheduler/run?userId=1
    └─ salary ≥ min │ required keywords │ no blacklist │ not already applied
         │
         ▼
-4. Save matched jobs → SQLite
+4. Save matched jobs → PostgreSQL
         │
         ▼
 5. Tailor Resume per job (Claude API)
-   └─ Base LaTeX + JD → Claude → Tailored LaTeX → Save to SQLite
+   └─ Base LaTeX + JD → Claude → Tailored LaTeX → Save to PostgreSQL
         │
         ▼ (only if autoApplyEnabled = true)
 6. Submit Applications (Playwright)

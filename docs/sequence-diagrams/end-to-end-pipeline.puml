@@ -5,7 +5,7 @@ autonumber
 ' ── Participants (I/O boundaries only) ──
 participant Client
 participant "linkedin-job-bot" as bot
-database "SQLite DB" as db
+database "PostgreSQL DB" as db
 participant "LinkedIn" as linkedin
 participant "Claude API" as claude
 participant "pdflatex" as latex

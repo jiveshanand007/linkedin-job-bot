@@ -6,7 +6,7 @@
 
 **Architecture:** `PlaywrightSessionManager` (plain Java class, not a Spring bean) owns browser lifecycle and login per run. `LinkedInJobFetcher` orchestrates the scrape loop, delegating DOM-to-string extraction to private helpers and string-to-Job mapping to the stateless `JobParser` component. `JobCardData` is the boundary record — no Playwright types cross into `JobParser`.
 
-**Tech Stack:** Java 17, Spring Boot 3.2, Playwright 1.40.0 (already in pom.xml), SQLite/JPA, SLF4J logging.
+**Tech Stack:** Java 17, Spring Boot 3.2, Playwright 1.40.0 (already in pom.xml), PostgreSQL/JPA, SLF4J logging.
 
 **No tests** — per project decision (Phase 5). Manual curl commands given for verification.
 

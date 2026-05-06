@@ -1,7 +1,7 @@
 # Database Schema - LinkedIn Job Apply Bot
 
 ## Overview
-5 JPA entities stored in SQLite, with relationships defining the data model.
+5 JPA entities stored in PostgreSQL, with relationships defining the data model.
 
 ---
 
