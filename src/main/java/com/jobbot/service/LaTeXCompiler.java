@@ -91,6 +91,7 @@ public class LaTeXCompiler {
                     texFile.toString()
             )
                     .redirectErrorStream(true)
+                    .redirectOutput(tempDir.resolve("pdflatex_run_" + run + ".log").toFile())
                     .start();
         } catch (IOException e) {
             throw new LaTeXCompilationException("Failed to start pdflatex", e);
