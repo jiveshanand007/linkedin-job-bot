@@ -98,13 +98,17 @@ LinkedInJobFetcher.fetchJobs(userConfig):
             → PlaywrightException/timeout: log warning, break loop
          c. for each card Locator:
               try {
-                // Step 1: extract card-level strings (Playwright exceptions caught here)
-                String jobId      = card.getAttribute("data-job-id")
-                String title      = card.locator(".job-card-list__title").innerText()
-                String company    = card.locator(".job-card-container__company-name").innerText()
-                String loc        = card.locator(".job-card-container__metadata-item").first().innerText()
-                String url        = card.locator("a.job-card-list__title").getAttribute("href")
-                String applyText  = card.locator(".job-card-container__apply-method").innerText()
+                // Required fields — if either throws, skip entire card
+                String jobId = card.getAttribute("data-job-id")
+                String title = card.locator(".job-card-list__title").innerText()
+                if (jobId is blank or title is blank) → continue to next card
+
+                // Optional fields — each in its own try/catch; missing selector → blank string
+                String company   = safeInnerText(card, ".job-card-container__company-name")
+                String loc       = safeInnerText(card, ".job-card-container__metadata-item")  // first()
+                String url       = safeGetAttr(card, "a.job-card-list__title", "href")
+                String applyText = safeInnerText(card, ".job-card-container__apply-method")
+                // safeInnerText / safeGetAttr = private helpers that return "" on any Playwright exception
 
                 // Step 2: click card, load detail panel, extract description
                 card.click()
@@ -120,8 +124,7 @@ LinkedInJobFetcher.fetchJobs(userConfig):
                 // Step 3: pass plain strings to JobParser (no Playwright types cross this boundary)
                 JobCardData data = new JobCardData(jobId, title, company, loc, url, applyText, description)
                 Optional<Job> job = jobParser.parseCard(data)
-                // JobParser validates semantics (blank required field → empty Optional)
-                // The outer try/catch handled Playwright structural failures above
+                // parseCard() NEVER throws; returns Optional.empty() for semantically invalid data
 
                 if (job.isPresent()) {
                   job.get().setUserConfig(userConfig)
@@ -129,9 +132,7 @@ LinkedInJobFetcher.fetchJobs(userConfig):
                   collected.add(job.get())
                 }
               } catch (Exception e) {
-                // Only Playwright structural failures reach here.
-                // jobParser.parseCard() is guaranteed never to throw — it returns
-                // Optional.empty() for all invalid/blank data internally.
+                // Only reaches here if required-field extraction (jobId/title) threw a Playwright error
                 log.warn("Skipping card due to Playwright error: {}", e.getMessage())
                 // continue to next card
               }
@@ -155,9 +156,10 @@ LinkedInJobFetcher.fetchJobs(userConfig):
 ```
 
 **Responsibility split — scrape loop vs JobParser:**
-- The per-card `catch (Exception e)` catches **Playwright structural failures only** (element not found, DOM API errors, navigation timeout). `jobParser.parseCard()` is placed after all Playwright calls and is **guaranteed never to throw** — it handles all edge cases internally and returns `Optional.empty()` for invalid data.
-- `JobParser.parseCard(JobCardData)` handles **semantic validation**: blank `linkedInJobId` or `title` → `Optional.empty()`; blank optional fields → fallback value. No exceptions propagate out of this method.
-- Missing DOM selectors for optional fields (company, location, url, applyMethod) are handled as blank strings by the scrape loop's per-card catch — these are treated as blank data, not structural failures, so they reach JobParser with empty strings and the fallback values are applied.
+- **Required fields** (`jobId`, `title`) are extracted in the outer per-card try/catch. Any Playwright exception skips the whole card.
+- **Optional fields** (`company`, `location`, `url`, `applyText`) each use a `safeInnerText`/`safeGetAttr` helper (returns `""` on any Playwright exception) — a missing optional selector never skips the card.
+- **Description** has its own nested try/catch; timeout → `""`, card is not skipped.
+- **`JobParser.parseCard()` never throws** — it receives raw strings (possibly blank), applies fallbacks for optional fields, and returns `Optional.empty()` only if required fields (`linkedInJobId`, `title`) are blank.
 
 **Persistence ownership:**
 - `LinkedInJobFetcher` returns unsaved `List<Job>` — it does **not** call `jobRepository.save()`.
@@ -285,10 +287,11 @@ Validation: userConfigId required and must exist; all filter fields optional wit
 Response 201: SearchConfigResponse JSON | 404 if userConfigId not found | 409 if already exists
 
 PUT    /api/search-config/{id}
-Body:  any subset of filter fields. Field update semantics:
-         - Field absent from JSON body → value unchanged
-         - Field present as null → reset to default (experienceLevel=null means "any", datePostedFilter=null→"ANY")
-       userConfigId is never updatable via PUT.
+Body (SearchConfigRequest — all filter fields, full replace):
+  All filter fields are replaced with provided values. null is treated as its default:
+    remoteOnly=null → false; experienceLevel=null → any; datePostedFilter=null → "ANY"; maxPages=null → 3
+  userConfigId is ignored in PUT body — not updatable.
+  Implementation: standard Jackson POJO binding; null field in JSON = reset to default. No partial-update semantics.
 Response 200: SearchConfigResponse JSON | 404 if not found
 
 GET    /api/search-config/user/{userConfigId}
@@ -333,7 +336,7 @@ Response 204 No Content | 404 if not found
 | Failure | Behavior |
 |---|---|
 | Login failure / CAPTCHA | `LoginFailedException` thrown in try block → catch logs error and returns `List.of()` → finally closes session (Java guarantees finally runs even after return in catch) |
-| Page navigation timeout | Log warning, save collected jobs, return |
+| Page navigation timeout | Log warning, break pagination loop, return jobs collected so far (unsaved) |
 | Card DOM extraction or parse error | Per-card `try/catch` — log warning, skip card, continue loop |
 | Within-batch duplicate (same job on multiple pages) | Deduped in step 5 via `LinkedHashMap` keyed on `linkedInJobId` |
 | Duplicate job (pre-save lookup) | Filtered out in step 6 via `findLinkedInJobIdsByUserConfig` — no DB exceptions |
