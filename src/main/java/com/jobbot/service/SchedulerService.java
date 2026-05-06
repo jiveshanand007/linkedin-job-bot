@@ -10,6 +10,7 @@ import com.jobbot.service.ApplicationSubmitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.List;
@@ -101,6 +102,20 @@ public class SchedulerService {
         }
 
         return result;
+    }
+
+    @Scheduled(cron = "0 0 * * * *")
+    public void runScheduledJobs() {
+        List<UserConfig> activeUsers = userConfigRepository.findBySchedulerActiveTrue();
+        logger.info("Scheduled run triggered. Active users: {}", activeUsers.size());
+        for (UserConfig user : activeUsers) {
+            try {
+                logger.info("Running scheduled pipeline for user {}", user.getId());
+                executeRun(user.getId());
+            } catch (Exception e) {
+                logger.error("Scheduled run failed for user {}", user.getId(), e);
+            }
+        }
     }
 }
 
