@@ -1,5 +1,6 @@
 package com.jobbot.repository;
 
+import com.jobbot.entity.Job;
 import com.jobbot.entity.Resume;
 import com.jobbot.entity.UserConfig;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,4 +11,5 @@ public interface ResumeRepository extends JpaRepository<Resume, Long> {
     List<Resume> findByUserConfig(UserConfig config);
     List<Resume> findByUserConfigAndIsActive(UserConfig config, Boolean active);
     Optional<Resume> findFirstByUserConfigAndIsActive(UserConfig config, Boolean active);
+    Optional<Resume> findFirstByJobAndUserConfig(Job job, UserConfig userConfig);
 }
