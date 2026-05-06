@@ -249,27 +249,21 @@ curl -X POST "http://localhost:8080/api/scheduler/run?userId=1" \
 curl -X POST "http://localhost:8080/api/scheduler/start?userId=1"
 ```
 
-**Response (Phase 1 - 200):**
-```json
-{
-  "status": "started",
-  "message": "Hourly scheduler will start in Phase 4"
-}
-```
-
 **Response (Phase 4 - 200):**
 ```json
 {
   "status": "started",
-  "message": "Bot will search for jobs every hour",
-  "nextRun": "2026-04-22T22:45:00"
+  "message": "Hourly scheduler now active",
+  "schedulerActive": true,
+  "nextRun": "2026-04-22T22:00:00"
 }
 ```
 
 **Notes:**
-- Phase 1: Placeholder only
-- Phase 4: Will schedule recurring Quartz job
+- Phase 4: Uses @Scheduled(cron) with Spring scheduling
+- Sets `scheduler_active=true` in user_config table
 - Runs at top of every hour
+- User can have multiple concurrent schedules
 
 ---
 
@@ -287,13 +281,194 @@ curl -X POST "http://localhost:8080/api/scheduler/stop?userId=1"
 **Response (200):**
 ```json
 {
-  "status": "stopped"
+  "status": "stopped",
+  "schedulerActive": false
 }
 ```
 
 **Notes:**
-- Phase 1: Placeholder only
-- Phase 4: Will cancel scheduled job
+- Phase 4: Disables @Scheduled job for user
+- Sets `scheduler_active=false` in user_config table
+
+---
+
+### 8. Get Scheduler Status
+
+**Endpoint:** `GET /api/scheduler/status?userId=1`
+
+**Purpose:** Check if hourly scheduler is active for user (Phase 4)
+
+**Request:**
+```bash
+curl "http://localhost:8080/api/scheduler/status?userId=1"
+```
+
+**Response (200):**
+```json
+{
+  "schedulerActive": true,
+  "autoApplyEnabled": false,
+  "userId": 1,
+  "nextRun": "2026-04-22T22:00:00",
+  "lastRun": "2026-04-22T21:00:00"
+}
+```
+
+**Response Fields:**
+- `schedulerActive` - Is hourly scheduler currently enabled?
+- `autoApplyEnabled` - Auto-apply enabled? (future feature)
+- `userId` - User ID
+- `nextRun` - Scheduled time of next run
+- `lastRun` - Time of last run (null if never run)
+
+**Notes:**
+- Phase 4: Real-time status from database
+- Shows next scheduled execution time
+
+---
+
+## Phase 3b APIs - Application Submission
+
+### Get Application History
+
+**Endpoint:** `GET /api/applications/user/{userId}`
+
+**Purpose:** View all submitted applications for a user with status
+
+**Request:**
+```bash
+curl "http://localhost:8080/api/applications/user/1?limit=20&offset=0&status=success"
+```
+
+**Response (Success - 200):**
+```json
+{
+  "totalCount": 42,
+  "applications": [
+    {
+      "id": 1,
+      "jobId": 5,
+      "jobTitle": "Senior Java Backend Developer",
+      "company": "TechCorp",
+      "status": "success",
+      "submittedAt": "2026-04-22T21:46:00",
+      "errorReason": null
+    },
+    {
+      "id": 2,
+      "jobId": 8,
+      "jobTitle": "Backend Engineer",
+      "company": "StartupXYZ",
+      "status": "failed",
+      "submittedAt": "2026-04-22T21:47:30",
+      "errorReason": "Form submission timeout after 30s"
+    }
+  ]
+}
+```
+
+**Query Parameters:**
+- `limit` (optional, default: 20) - Number of records to return [1..100]
+- `offset` (optional, default: 0) - Pagination offset
+- `status` (optional) - Filter: "success", "failed", "pending"
+- `orderBy` (optional, default: "submittedAt") - Sort field: "submittedAt", "createdAt", "status"
+
+**Response (404 - Not Found):**
+```json
+{
+  "error": "User not found: 1"
+}
+```
+
+**Response (400 - Bad Request):**
+```json
+{
+  "error": "Invalid limit: must be between 1 and 100"
+}
+```
+
+**Response Fields:**
+- `totalCount` - Total applications for user (ignoring limit/offset)
+- `applications[]` - Array of application records
+  - `id` - Application record ID
+  - `jobId` - Linked job ID
+  - `jobTitle` - Job title (denormalized for convenience)
+  - `company` - Company name (denormalized)
+  - `status` - "success", "failed", or "pending"
+  - `submittedAt` - When application was submitted (null if pending)
+  - `errorReason` - If status is "failed"
+
+**Common Filters:**
+```bash
+# Get last 10 successful applications
+curl "http://localhost:8080/api/applications/user/1?status=success&limit=10"
+
+# Get failed applications for debugging
+curl "http://localhost:8080/api/applications/user/1?status=failed&limit=50&orderBy=submittedAt"
+
+# Get oldest pending applications (stuck jobs)
+curl "http://localhost:8080/api/applications/user/1?status=pending&limit=10&orderBy=createdAt"
+```
+
+---
+
+### Get Single Application Details
+
+**Endpoint:** `GET /api/applications/{applicationId}`
+
+**Purpose:** View detailed information about a specific application
+
+**Request:**
+```bash
+curl "http://localhost:8080/api/applications/1"
+```
+
+**Response (Success - 200):**
+```json
+{
+  "id": 1,
+  "jobId": 5,
+  "resumeId": 10,
+  "job": {
+    "id": 5,
+    "title": "Senior Java Developer",
+    "company": "TechCorp",
+    "url": "https://linkedin.com/jobs/view/..."
+  },
+  "status": "success",
+  "errorReason": null,
+  "generatedPdfPath": "/pdfs/resume_abc123.pdf",
+  "coverLetter": "Dear Hiring Manager,\n\nI am writing to express...",
+  "resumeVersionHash": "sha256_hash_of_tailored_resume",
+  "applicationResponse": {
+    "message": "Your application has been submitted successfully",
+    "confirmationId": "APP_12345"
+  },
+  "submittedAt": "2026-04-22T21:46:00",
+  "createdAt": "2026-04-22T21:46:00"
+}
+```
+
+**Response (404 - Not Found):**
+```json
+{
+  "error": "Application not found: 1"
+}
+```
+
+**Response Fields:**
+- `id` - Application record ID
+- `jobId` - Linked job ID
+- `resumeId` - Tailored resume used
+- `job` - Embedded job details
+- `status` - "success", "failed", or "pending"
+- `errorReason` - Full error text if failed
+- `generatedPdfPath` - Path to compiled PDF resume
+- `coverLetter` - Generated cover letter text
+- `resumeVersionHash` - Hash of tailored resume for audit
+- `applicationResponse` - JSON response from company form (if available)
+- `submittedAt` - Submission timestamp
+- `createdAt` - Record creation timestamp
 
 ---
 
@@ -468,14 +643,8 @@ curl -X DELETE http://localhost:8080/api/search-config/1
 
 ### Get Application History (Phase 4)
 ```
-GET /api/applications/history?userId=1&limit=20
-  → Returns list of all applications with status
-```
-
-### View Audit Logs (Phase 4)
-```
-GET /api/logs?userId=1&limit=100
-  → Returns complete audit trail
+GET /api/logs?userId=1&limit=100&action=application_submitted
+  → Returns complete audit trail with filtering by action type
 ```
 
 ---

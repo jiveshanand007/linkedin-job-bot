@@ -45,7 +45,9 @@ Stores user credentials and job search preferences.
 | min_salary_lpa | INT | NO | Minimum salary in LPA |
 | years_experience_max | INT | NO | Max years filter (0-3) |
 | location | VARCHAR(255) | NO | "Remote,Bangalore" |
+| phone_number | VARCHAR(20) | YES | User's phone for Easy Apply forms (Phase 3b) |
 | auto_apply_enabled | BOOLEAN | NO | Default: false |
+| scheduler_active | BOOLEAN | NO | Default: false — controls hourly @Scheduled job (Phase 4) |
 | created_at | TIMESTAMP | YES | Insertion timestamp |
 | updated_at | TIMESTAMP | YES | Last update timestamp |
 
@@ -60,7 +62,9 @@ blacklist_keywords: Manager,Director
 min_salary_lpa: 30
 years_experience_max: 3
 location: Remote
+phone_number: +91-9876543210
 auto_apply_enabled: false
+scheduler_active: true
 created_at: 2026-04-22 21:45:00
 updated_at: 2026-04-22 21:45:00
 ```

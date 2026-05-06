@@ -354,6 +354,140 @@ Optional<Resume> tailorAndSave(Job job, Resume baseResume)
 
 ---
 
+### 4a. LaTeXCompiler (Phase 3b - COMPLETE ✅)
+
+**File:** `src/main/java/com/jobbot/service/LaTeXCompiler.java`
+
+**Type:** `@Component` (Spring-managed utility)
+
+**Responsibility:** Compile LaTeX resume content to PDF using pdflatex
+
+**Methods:**
+```java
+File compileToPdf(String latexContent, Long resumeId) throws Exception
+```
+
+**Inputs:**
+- `latexContent` - Full LaTeX resume source code
+- `resumeId` - Resume ID for file naming
+
+**Outputs:**
+- `File` — Path to generated PDF on success
+
+**What It Does:**
+1. Write LaTeX content to temporary `.tex` file
+2. Run pdflatex in 2-pass mode (ensures TOC, references, syntax)
+3. Extract and move PDF to persistent storage (`/pdfs/resume_{resumeId}.pdf`)
+4. Clean up temporary files
+5. Return File reference or throw exception on failure
+
+**Dependencies:**
+- System: pdflatex (must be installed)
+- File I/O utilities
+
+**Installation Required:**
+- Linux: `sudo apt install texlive-latex-base`
+- macOS: `brew install --cask mactex`
+- Windows: MiKTeX or TeX Live
+
+---
+
+### 4b. PlaywrightApplicationSession (Phase 3b - COMPLETE ✅)
+
+**File:** `src/main/java/com/jobbot/entity/PlaywrightApplicationSession.java`
+
+**Type:** Plain Java class (not Spring-managed)
+
+**Responsibility:** Encapsulate Easy Apply form automation logic
+
+**Methods:**
+```java
+void fillEasyApplyForm(BrowserContext context, Job job, File pdfPath, String coverLetter)
+ApplicationResult submitForm()
+```
+
+**Inputs:**
+- `context` - Playwright BrowserContext (from PlaywrightSessionManager)
+- `job` - Job with application URL
+- `pdfPath` - Path to compiled resume PDF
+- `coverLetter` - Generated cover letter text
+
+**Outputs:**
+- `ApplicationResult` with status (success/failed) and error details
+
+**What It Does:**
+1. Navigates to Easy Apply button on job listing
+2. Detects form fields (name, email, phone, etc.)
+3. Auto-fills common fields from UserConfig
+4. Uploads resume PDF
+5. Inserts cover letter (if text field exists)
+6. Detects required vs optional fields
+7. Submits form and verifies success page
+
+**Field Detection:**
+- Standard fields: name, email, phone, location
+- Optional fields: experience, cover letter, attachments
+- Fallback to Claude API for unknown required fields
+
+**Dependencies:**
+- Playwright (browser automation)
+- ApplicationResult (result object)
+
+---
+
+### 4c. ApplicationSubmitter (Phase 3b - COMPLETE ✅)
+
+**File:** `src/main/java/com/jobbot/service/ApplicationSubmitter.java`
+
+**Type:** `@Component` (Spring-managed service)
+
+**Responsibility:** Orchestrate end-to-end application submission
+
+**Methods:**
+```java
+ApplicationResult submitApplication(Job job, Resume tailoredResume, String coverLetter)
+```
+
+**Inputs:**
+- `job` - Job to apply to (with application_type field)
+- `tailoredResume` - Resume entity with LaTeX content
+- `coverLetter` - Generated cover letter text
+
+**Outputs:**
+- `ApplicationResult` with:
+  - `status` - "success" or "failed"
+  - `errorReason` - If failed
+  - `applicationResponse` - Form confirmation (if available)
+
+**Execution Pipeline:**
+```
+1. Call LaTeXCompiler.compileToPdf(tailoredResume.latexContent)
+2. If Easy Apply:
+   - Create PlaywrightApplicationSession
+   - Fill form fields
+   - Upload PDF
+   - Insert cover letter
+   - Submit
+3. Else (External form):
+   - Navigate to company form
+   - Auto-fill common fields
+   - Upload PDF
+   - Detect unknowns, use Claude if needed
+   - Submit
+4. Save Application record to database
+5. Return ApplicationResult
+```
+
+**Dependencies:**
+- LaTeXCompiler
+- PlaywrightApplicationSession
+- PlaywrightSessionManager
+- ApplicationRepository
+- ResumeRepository
+- ClaudeApiClient (for field detection)
+
+---
+
 ### 5. ApplicationSubmitter (Phase 3 - NOT YET IMPLEMENTED)
 
 **File:** `src/main/java/com/jobbot/service/ApplicationSubmitter.java` (to be created)
@@ -424,10 +558,11 @@ Content-Type: application/json
   "blacklistKeywords": "Manager,Director",
   "minSalaryLPA": 30,
   "yearsExperienceMax": 3,
-  "location": "Remote,Bangalore"
+  "location": "Remote,Bangalore",
+  "phoneNumber": "+91-9876543210"
 }
 
-Response: { id: 1, email, ... }
+Response: { id: 1, email, phoneNumber, ... }
 ```
 
 #### Upload Resume
@@ -457,7 +592,7 @@ Response: [
 ```
 GET /api/config/1
 
-Response: { id: 1, email, linkedInEmail, jobKeywords, ... }
+Response: { id: 1, email, linkedInEmail, jobKeywords, phoneNumber, ... }
 ```
 
 **Error Handling:**
@@ -470,7 +605,7 @@ Response: { id: 1, email, linkedInEmail, jobKeywords, ... }
 
 **File:** `src/main/java/com/jobbot/controller/SchedulerController.java`
 
-**Phase Status:** Phase 1 - Partial (manual trigger only)
+**Phase Status:** Phase 1 - Partial (manual trigger) / Phase 4 - Complete (@Scheduled support)
 
 **Endpoints:**
 
@@ -493,10 +628,11 @@ POST /api/scheduler/start?userId=1
 
 Response: {
   "status": "started",
-  "message": "Hourly scheduler will start in Phase 4"
+  "message": "Hourly scheduler running",
+  "nextRun": "2026-04-22T22:00:00"
 }
 ```
-(Phase 4 implementation)
+(Phase 4: Now uses @Scheduled annotation)
 
 #### Stop Scheduler
 ```
@@ -504,11 +640,159 @@ POST /api/scheduler/stop?userId=1
 
 Response: { "status": "stopped" }
 ```
-(Phase 4 implementation)
+(Phase 4: Disables scheduler for user)
+
+#### Get Scheduler Status
+```
+GET /api/scheduler/status?userId=1
+
+Response: {
+  "schedulerActive": true,
+  "autoApplyEnabled": false,
+  "userId": 1,
+  "nextRun": "2026-04-22T22:00:00"
+}
+```
+(Phase 4: New endpoint for status monitoring)
 
 **Error Handling:**
 - 400: User not found
 - 500: Execution error (logged with details)
+
+---
+
+### 3. ApplicationController (Phase 3b - COMPLETE ✅)
+
+**File:** `src/main/java/com/jobbot/controller/ApplicationController.java`
+
+**Phase Status:** Phase 3b - COMPLETE
+
+**Endpoints:**
+
+#### Get Application History
+```
+GET /api/applications/user/{userId}?limit=20&offset=0
+
+Response: [
+  {
+    "id": 1,
+    "jobId": 1,
+    "jobTitle": "Senior Java Developer",
+    "company": "TechCorp",
+    "status": "success",
+    "submittedAt": "2026-04-22T21:46:00",
+    "errorReason": null
+  },
+  {
+    "id": 2,
+    "jobId": 2,
+    "jobTitle": "Backend Engineer",
+    "company": "StartupXYZ",
+    "status": "failed",
+    "submittedAt": null,
+    "errorReason": "Form submission timeout"
+  }
+]
+```
+
+#### Get Single Application
+```
+GET /api/applications/{applicationId}
+
+Response: {
+  "id": 1,
+  "jobId": 1,
+  "resumeId": 10,
+  "status": "success",
+  "errorReason": null,
+  "generatedPdfPath": "/pdfs/resume_abc123.pdf",
+  "coverLetter": "Dear Hiring Manager...",
+  "submittedAt": "2026-04-22T21:46:00",
+  "createdAt": "2026-04-22T21:46:00"
+}
+```
+
+**Query Parameters:**
+- `limit` (optional, default: 20) - Number of records to return
+- `offset` (optional, default: 0) - Pagination offset
+- `status` (optional) - Filter by status: success, failed, pending
+
+**Response Fields:**
+- `id` - Application record ID
+- `jobId` - Linked job ID
+- `status` - "success", "failed", or "pending"
+- `submittedAt` - When application was submitted
+- `errorReason` - If status is "failed"
+
+**Error Handling:**
+- 404: User not found
+- 400: Invalid query parameters
+- 500: Database error
+
+**Common Filters:**
+```bash
+# Get last 10 successful applications
+GET /api/applications/user/1?status=success&limit=10
+
+# Get failed applications for debugging
+GET /api/applications/user/1?status=failed&limit=50
+```
+
+---
+
+### 4. SearchConfigController
+
+**File:** `src/main/java/com/jobbot/controller/SearchConfigController.java`
+
+**Phase Status:** Phase 3a - COMPLETE ✅
+
+**Endpoints:**
+
+#### Create Search Config
+```
+POST /api/search-config
+
+{
+  "userConfigId": 1,
+  "remoteOnly": true,
+  "experienceLevel": "MID",
+  "datePostedFilter": "PAST_WEEK",
+  "maxPages": 5
+}
+
+Response: { id: 1, userConfigId: 1, ... }
+```
+
+#### Update Search Config
+```
+PUT /api/search-config/{id}
+
+{
+  "remoteOnly": false,
+  "experienceLevel": "SENIOR"
+}
+
+Response: { id: 1, userConfigId: 1, ... }
+```
+
+#### Get Search Config by User
+```
+GET /api/search-config/user/{userId}
+
+Response: { id: 1, userConfigId: 1, remoteOnly: true, ... }
+```
+
+#### Delete Search Config
+```
+DELETE /api/search-config/{id}
+
+Response: 204 No Content
+```
+
+**Error Handling:**
+- 400: Invalid input
+- 404: Not found
+- 500: Database error
 
 ---
 
@@ -560,15 +844,18 @@ save(AuditLog)
 | SearchConfig | 3a | ✅ Complete | Per-user search filters |
 | SearchConfigController | 3a | ✅ Complete | Search config CRUD API |
 | JobMatcher | 1 | ✅ Complete | Filter jobs |
-| SchedulerService | 1,2 | ✅ Updated | Orchestrate pipeline |
+| SchedulerService | 1,2,4 | ✅ Updated | Orchestrate pipeline + @Scheduled support |
 | ClaudeApiClient | 2 | ✅ Complete | Anthropic API HTTP client |
 | ResumeTailor | 2 | ✅ Complete | AI resume tailoring |
-| ApplicationSubmitter | 3 | TODO | Submit applications |
+| LaTeXCompiler | 3b | ✅ Complete | LaTeX→PDF compilation via pdflatex |
+| PlaywrightApplicationSession | 3b | ✅ Complete | Easy Apply form automation |
+| ApplicationSubmitter | 3b | ✅ Complete | Orchestrate submission pipeline |
 | ConfigController | 1 | ✅ Complete | Setup API |
 | ResumeController | 2 | ✅ Complete | Tailor API |
-| SchedulerController | 1,4 | Partial | Trigger API |
-| 5 Entities | 1,2 | ✅ Updated | Data models |
-| 5 Repositories | 1,2 | ✅ Updated | Data access |
+| SchedulerController | 1,4 | ✅ Complete | Trigger + Scheduler status API |
+| ApplicationController | 3b | ✅ Complete | Application history API |
+| 6 Entities | 1,2,3a | ✅ Updated | Data models |
+| 6 Repositories | 1,2,3a | ✅ Updated | Data access |
 
 ---
 

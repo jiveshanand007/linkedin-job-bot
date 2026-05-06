@@ -8,9 +8,10 @@
 3. Applies to jobs automatically with tailored documents
 4. Tracks all applications with audit logs
 
-**Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3a ✅ Complete | Phase 3b+ ⏳  
+**Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3a ✅ Complete | Phase 3b ✅ Complete | Phase 4 ✅ Complete  
 **Tech Stack:** Java 17, Spring Boot 3.2, SQLite, Playwright, Claude API  
-**Codebase:** 20 Java files
+**Codebase:** 20+ Java files  
+**Dependencies:** pdflatex required — Linux: `sudo apt install texlive-latex-base` | macOS: `brew install --cask mactex`
 
 ---
 
@@ -63,8 +64,12 @@ linkedin-job-bot/
 | **JobParser** | 1 service | DOM-to-Job mapping (Phase 3a) |
 | **JobMatcher** | 1 service | Filters jobs by keywords, salary, blacklist |
 | **SchedulerService** | 1 service | Orchestrates the full job search→match→apply pipeline |
+| **LaTeXCompiler** | 1 component | Compiles LaTeX to PDF via pdflatex, 2-pass compilation (Phase 3b) |
+| **PlaywrightApplicationSession** | 1 helper | Handles Easy Apply form automation (Phase 3b) |
+| **ApplicationSubmitter** | 1 component | Orchestrates PDF compile + login + Easy Apply submission (Phase 3b) |
 | **ConfigController** | 1 controller | APIs for setup, resume upload, configuration |
-| **SchedulerController** | 1 controller | APIs for triggering job searches and scheduling |
+| **SchedulerController** | 1 controller | APIs for triggering job searches, scheduling, and status (Phase 4) |
+| **ApplicationController** | 1 controller | GET /api/applications/user/{userId} for application history (Phase 3b) |
 | **SearchConfigController** | 1 controller | REST CRUD for search filters (Phase 3a) |
 
 ---
@@ -91,11 +96,15 @@ linkedin-job-bot/
 - `SearchConfig` — JPA entity for per-user search preferences
 - `SearchConfigController` — REST CRUD endpoints for search filters
 
-### ⏳ Phase 3b: Application Submission (TODO)
-- ApplicationSubmitter — Easy Apply + external form filling
+### ✅ Phase 3b: Application Submission (COMPLETE)
+- `LaTeXCompiler` — Compiles tailored LaTeX resumes to PDF via pdflatex (2-pass)
+- `PlaywrightApplicationSession` — Automates Easy Apply form filling and submission
+- `ApplicationSubmitter` — Orchestrates full submission pipeline (compile → login → apply)
+- `ApplicationController` — REST endpoints for viewing application history
 
-### ⏳ Phase 4: Full Automation (TODO)
-- Quartz scheduler (hourly runs)
+### ✅ Phase 4: Full Automation (COMPLETE)
+- `@Scheduled(cron)` hourly job scheduler with user control
+- Scheduler start/stop/status endpoints
 - Application history & audit log endpoints
 
 ### ⏳ Phase 5: Testing & Deployment (TODO)
