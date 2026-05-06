@@ -21,11 +21,14 @@
 linkedin-job-bot/
 ├── pom.xml                          # Maven dependencies & build config
 ├── README.md                        # This file — start here
-├── ARCHITECTURE.md                  # System design & data flow
-├── COMPONENTS.md                    # Detailed component descriptions
-├── API_ENDPOINTS.md                 # REST API reference
-├── DATABASE_SCHEMA.md               # Entity relationships & schema
-├── docs/superpowers/
+├── docs/
+│   ├── QUICKSTART.md                # ⭐ Start here — step-by-step setup guide
+│   ├── ARCHITECTURE.md              # System design & data flow
+│   ├── COMPONENTS.md                # Detailed component descriptions
+│   ├── API_ENDPOINTS.md             # REST API reference
+│   ├── DATABASE_SCHEMA.md           # Entity relationships & schema
+│   ├── sequence-diagrams/           # PlantUML diagrams
+│   └── superpowers/
 │   ├── specs/                       # Design specs per phase
 │   └── plans/                       # Implementation plans per phase
 ├── src/main/
@@ -155,7 +158,7 @@ Future Phase 3: Apply to each job with tailored resume
 | **applications** | id, job_id, resume_id, status, generatedPdfPath, errorReason | Application attempts & results |
 | **audit_logs** | id, user_id, action, details, timestamp | Complete audit trail |
 
-See `DATABASE_SCHEMA.md` for full details.
+See `docs/DATABASE_SCHEMA.md` for full details.
 
 ---
 
@@ -176,22 +179,22 @@ POST   /api/scheduler/start?userId=X        → Start hourly scheduler (Phase 4)
 POST   /api/scheduler/stop?userId=X         → Stop hourly scheduler (Phase 4)
 ```
 
-See `API_ENDPOINTS.md` for full reference with examples.
+See `docs/API_ENDPOINTS.md` for full reference with examples.
 
 ---
 
 ## Key Files to Know
 
 ### For Understanding Architecture
-- `ARCHITECTURE.md` - System design, data flow diagrams
-- `COMPONENTS.md` - Detailed description of each service
+- `docs/ARCHITECTURE.md` - System design, data flow diagrams
+- `docs/COMPONENTS.md` - Detailed description of each service
 
 ### For Understanding Data
-- `DATABASE_SCHEMA.md` - Entity relationships and fields
+- `docs/DATABASE_SCHEMA.md` - Entity relationships and fields
 - `src/main/java/com/jobbot/entity/` - Entity class definitions
 
 ### For API Integration
-- `API_ENDPOINTS.md` - All endpoints with curl examples
+- `docs/API_ENDPOINTS.md` - All endpoints with curl examples
 - `src/main/java/com/jobbot/controller/` - Controller implementations
 
 ### Configuration & Setup
@@ -250,9 +253,9 @@ mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="in
 ```
 
 ### For Development
-1. Read `ARCHITECTURE.md` to understand the design
-2. Read `COMPONENTS.md` for detailed component descriptions
-3. Check `API_ENDPOINTS.md` for testing endpoints
+1. Read `docs/ARCHITECTURE.md` to understand the design
+2. Read `docs/COMPONENTS.md` for detailed component descriptions
+3. Check `docs/API_ENDPOINTS.md` for testing endpoints
 4. Review entity classes in `entity/` folder
 
 ### For Running Locally
@@ -272,10 +275,10 @@ mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="in
 ## Token Optimization Notes
 
 This documentation is designed to minimize token usage in future sessions:
-- **ARCHITECTURE.md** - High-level overview (load for design questions)
-- **COMPONENTS.md** - Component details (load to understand specific service)
-- **API_ENDPOINTS.md** - API reference (load for API integration)
-- **DATABASE_SCHEMA.md** - Entity details (load for database questions)
+- **docs/ARCHITECTURE.md** - High-level overview (load for design questions)
+- **docs/COMPONENTS.md** - Component details (load to understand specific service)
+- **docs/API_ENDPOINTS.md** - API reference (load for API integration)
+- **docs/DATABASE_SCHEMA.md** - Entity details (load for database questions)
 - Main code files only loaded when implementation is needed
 
 Load only the documentation files relevant to your question to save tokens.
