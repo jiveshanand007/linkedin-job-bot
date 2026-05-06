@@ -1,0 +1,182 @@
+@startuml
+'https://plantuml.com/sequence-diagram
+autonumber
+
+' ── Participants (I/O boundaries only) ──
+participant Client
+participant "linkedin-job-bot" as bot
+database "SQLite DB" as db
+participant "LinkedIn" as linkedin
+participant "Claude API" as claude
+participant "pdflatex" as latex
+
+' ══════════════════════════════════════════════
+' TRIGGER: Manual OR Hourly @Scheduled
+' ══════════════════════════════════════════════
+
+note over Client
+  Two trigger modes:
+  1. Manual  → POST /api/scheduler/run?userId=1
+  2. Hourly  → @Scheduled(cron="0 0 * * * *")
+               picks all users where schedulerActive=true
+end note
+
+Client -> bot: POST /api/scheduler/run?userId=1
+
+activate bot #LightBlue
+
+== 1. Load User Config ==
+
+bot -> db: table: user_config [get by id]
+activate db
+db --> bot: UserConfig (keywords, salary, credentials)
+deactivate db
+
+== 2. Fetch Jobs from LinkedIn ==
+
+note over bot
+  LinkedInJobFetcher.fetchJobs(config)
+  → PlaywrightSessionManager.createSession()
+end note
+
+bot -> linkedin: Headless Chromium login (email + password)
+activate linkedin #LightYellow
+linkedin --> bot: session / feed page
+bot -> linkedin: GET /jobs/search?keywords=...&location=...&filters...
+linkedin --> bot: job listing pages (up to maxPages × 25 cards)
+note over bot
+  JobParser.parseCard() per card
+  → extracts title, company, salary, JD, applicationType
+  → dedup within batch via LinkedHashMap
+  → dedup cross-run via findLinkedInJobIdsByUserConfig()
+end note
+bot -> db: table: jobs [get existing linkedInJobIds for user]
+activate db
+db --> bot: Set<String> existingIds
+deactivate db
+deactivate linkedin
+
+== 3. Filter Jobs ==
+
+note over bot
+  JobMatcher.filterJobs(jobs, config)
+  → salary >= minSalaryLPA
+  → required keywords present in title/JD
+  → no blacklist keywords
+  → not already applied
+end note
+
+bot -> db: table: applications [check existing per job]
+activate db
+db --> bot: existing application flags
+deactivate db
+
+bot -> db: table: jobs [save matched jobs]
+activate db
+db --> bot: saved
+deactivate db
+
+== 4. Tailor Resume (Claude API) ==
+
+bot -> db: table: resumes [get active base resume]
+activate db
+db --> bot: Resume (latexContent)
+deactivate db
+
+alt Active base resume found
+
+  loop for each matched job
+    note over bot
+      ResumeTailor.tailorAndSave(job, baseResume)
+      → builds Claude prompt with JD + LaTeX
+    end note
+
+    bot -> claude: POST /v1/messages (JD + base LaTeX)
+    activate claude #LightGreen
+    claude --> bot: tailored LaTeX sections
+    deactivate claude
+
+    bot -> db: table: resumes [insert tailored resume, jobId=X]
+    activate db
+    db --> bot: saved tailored Resume
+    deactivate db
+  end
+
+else No active base resume
+  note over bot: skip tailoring, warn logged
+end
+
+== 5. Submit Applications (if autoApplyEnabled) ==
+
+alt autoApplyEnabled = true
+
+  loop for each matched job
+
+    bot -> db: table: resumes [get tailored resume for job]
+    activate db
+    db --> bot: tailored Resume
+    deactivate db
+
+    alt tailored resume found
+
+      note over bot
+        ApplicationSubmitter.submit(job, resume, config)
+        → save Application(status=pending)
+      end note
+
+      bot -> db: table: applications [insert pending]
+      activate db
+      db --> bot: Application record
+      deactivate db
+
+      bot -> latex: pdflatex (2-pass compile of LaTeX)
+      activate latex #Orange
+      alt compile success
+        latex --> bot: resume_job_{id}.pdf path
+      else compile failed
+        latex --> bot: LaTeXCompilationException
+        note over bot: status = failed, errorReason set
+      end
+      deactivate latex
+
+      alt PDF compiled successfully
+        note over bot
+          PlaywrightApplicationSession.login()
+          + submitEasyApply(jobUrl, pdfPath, coverLetter)
+        end note
+
+        bot -> linkedin: Headless login + navigate to job URL
+        activate linkedin #LightYellow
+        bot -> linkedin: Click Easy Apply → fill form → upload PDF → Submit
+        alt submission success
+          linkedin --> bot: Application submitted
+          note over bot: status = success, submittedAt = now
+        else form could not be completed
+          linkedin --> bot: (modal dismissed / max steps)
+          note over bot: status = failed, errorReason set
+        end
+        deactivate linkedin
+
+        bot -> db: table: applications [update status + submittedAt]
+        activate db
+        db --> bot: saved
+        deactivate db
+      end
+
+    else no tailored resume
+      note over bot: skip application, warn logged
+    end
+
+  end
+
+else autoApplyEnabled = false
+  note over bot: skip application submission
+end
+
+== 6. Return Result ==
+
+bot --> Client: 200 { jobsFetched, jobsMatched, applicationsSubmitted, tailoringErrors }
+
+deactivate bot
+
+@enduml
