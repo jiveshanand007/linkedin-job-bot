@@ -129,7 +129,10 @@ LinkedInJobFetcher.fetchJobs(userConfig):
                   collected.add(job.get())
                 }
               } catch (Exception e) {
-                log.warn("Skipping card: {}", e.getMessage())
+                // Only Playwright structural failures reach here.
+                // jobParser.parseCard() is guaranteed never to throw — it returns
+                // Optional.empty() for all invalid/blank data internally.
+                log.warn("Skipping card due to Playwright error: {}", e.getMessage())
                 // continue to next card
               }
 
@@ -152,9 +155,9 @@ LinkedInJobFetcher.fetchJobs(userConfig):
 ```
 
 **Responsibility split — scrape loop vs JobParser:**
-- The per-card `try/catch` in the loop handles **Playwright structural failures** (element not found, DOM API errors, timeouts). These are infrastructure errors.
-- `JobParser.parseCard(JobCardData)` handles **semantic validation** (blank `linkedInJobId` or `title` → `Optional.empty()`; blank optional fields → fallback value). These are data quality concerns.
-- The two layers are complementary. The loop passes raw strings (possibly blank) to JobParser — JobParser decides if they constitute a valid job.
+- The per-card `catch (Exception e)` catches **Playwright structural failures only** (element not found, DOM API errors, navigation timeout). `jobParser.parseCard()` is placed after all Playwright calls and is **guaranteed never to throw** — it handles all edge cases internally and returns `Optional.empty()` for invalid data.
+- `JobParser.parseCard(JobCardData)` handles **semantic validation**: blank `linkedInJobId` or `title` → `Optional.empty()`; blank optional fields → fallback value. No exceptions propagate out of this method.
+- Missing DOM selectors for optional fields (company, location, url, applyMethod) are handled as blank strings by the scrape loop's per-card catch — these are treated as blank data, not structural failures, so they reach JobParser with empty strings and the fallback values are applied.
 
 **Persistence ownership:**
 - `LinkedInJobFetcher` returns unsaved `List<Job>` — it does **not** call `jobRepository.save()`.
@@ -266,9 +269,9 @@ public class SearchConfig {
 **DTO strategy:** Controller uses two simple DTOs to avoid exposing the nested `UserConfig` object (which contains `linkedInPasswordEncrypted`):
 
 - **`SearchConfigRequest`** — input DTO: `{ userConfigId: Long, remoteOnly: Boolean, experienceLevel: String, datePostedFilter: String, maxPages: Integer }`
-- **`SearchConfigResponse`** — output DTO: `{ id: Long, userConfigId: Long, remoteOnly: Boolean, experienceLevel: String, datePostedFilter: String, maxPages: Integer, createdAt, updatedAt }` — no nested `UserConfig`, no password field
+- **`SearchConfigResponse`** — output DTO: `{ id: Long, userConfigId: Long, remoteOnly: Boolean, experienceLevel: String, datePostedFilter: String, maxPages: Integer, createdAt: String (ISO-8601), updatedAt: String (ISO-8601) }` — no nested `UserConfig`, no password field
 
-Controller maps: `SearchConfigRequest` → resolves `UserConfig` by `userConfigId` → builds `SearchConfig` entity → saves → maps to `SearchConfigResponse`.
+Controller maps: `SearchConfigRequest` → resolves `UserConfig` by `userConfigId` → builds `SearchConfig` entity → sets `createdAt = updatedAt = LocalDateTime.now()` on POST, `updatedAt = LocalDateTime.now()` on PUT → saves → maps to `SearchConfigResponse`.
 
 ```
 POST   /api/search-config
@@ -282,7 +285,10 @@ Validation: userConfigId required and must exist; all filter fields optional wit
 Response 201: SearchConfigResponse JSON | 404 if userConfigId not found | 409 if already exists
 
 PUT    /api/search-config/{id}
-Body:  any subset of filter fields (only non-null fields updated; userConfigId not updatable)
+Body:  any subset of filter fields. Field update semantics:
+         - Field absent from JSON body → value unchanged
+         - Field present as null → reset to default (experienceLevel=null means "any", datePostedFilter=null→"ANY")
+       userConfigId is never updatable via PUT.
 Response 200: SearchConfigResponse JSON | 404 if not found
 
 GET    /api/search-config/user/{userConfigId}
@@ -298,6 +304,7 @@ Response 204 No Content | 404 if not found
 
 | File | Purpose |
 |---|---|
+| `exception/LoginFailedException.java` | Unchecked exception (`extends RuntimeException`) — thrown by `PlaywrightSessionManager.createSession()` on CAPTCHA/2FA/timeout |
 | `entity/JobCardData.java` | Plain Java record — bridge between scrape loop and JobParser, no Playwright types |
 | `entity/SearchConfig.java` | New JPA entity |
 | `dto/SearchConfigRequest.java` | Input DTO: userConfigId + filter fields |
@@ -325,7 +332,7 @@ Response 204 No Content | 404 if not found
 
 | Failure | Behavior |
 |---|---|
-| Login failure / CAPTCHA | `LoginFailedException` caught after `finally` — browser closed, empty list returned |
+| Login failure / CAPTCHA | `LoginFailedException` thrown in try block → catch logs error and returns `List.of()` → finally closes session (Java guarantees finally runs even after return in catch) |
 | Page navigation timeout | Log warning, save collected jobs, return |
 | Card DOM extraction or parse error | Per-card `try/catch` — log warning, skip card, continue loop |
 | Within-batch duplicate (same job on multiple pages) | Deduped in step 5 via `LinkedHashMap` keyed on `linkedInJobId` |
