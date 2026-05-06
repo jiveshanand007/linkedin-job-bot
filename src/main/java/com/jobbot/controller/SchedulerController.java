@@ -1,6 +1,8 @@
 package com.jobbot.controller;
 
 import com.jobbot.service.SchedulerService;
+import com.jobbot.entity.UserConfig;
+import com.jobbot.repository.UserConfigRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +20,9 @@ public class SchedulerController {
     @Autowired
     private SchedulerService schedulerService;
 
+    @Autowired
+    private UserConfigRepository userConfigRepository;
+
     @PostMapping("/run")
     public ResponseEntity<?> manualRun(@RequestParam Long userId) {
         try {
@@ -33,10 +38,14 @@ public class SchedulerController {
     @PostMapping("/start")
     public ResponseEntity<?> startScheduler(@RequestParam Long userId) {
         try {
-            logger.info("Scheduler start requested for user: {}", userId);
-            return ResponseEntity.ok(Map.of("status", "started", "message", "Hourly scheduler will start in Phase 4"));
+            UserConfig config = userConfigRepository.findById(userId).orElse(null);
+            if (config == null) return ResponseEntity.notFound().build();
+            config.setSchedulerActive(true);
+            userConfigRepository.save(config);
+            logger.info("Scheduler activated for user {}", userId);
+            return ResponseEntity.ok(Map.of("status", "started", "userId", userId));
         } catch (Exception e) {
-            logger.error("Error starting scheduler", e);
+            logger.error("Error starting scheduler for user {}", userId, e);
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
         }
     }
