@@ -16,7 +16,7 @@
 
 | Class | Responsibility | Interface |
 |---|---|---|
-| `PlaywrightSessionManager` | Owns browser open/close and LinkedIn login. Returns a ready `Page` or throws `LoginFailedException`. | `Page createSession(email, password)` / `void closeSession()` |
+| `PlaywrightSessionManager` | Plain Java class (NOT a Spring bean) — instantiated fresh per `fetchJobs` call by `LinkedInJobFetcher`. Owns browser open/close and LinkedIn login within a single run. | `Page createSession(linkedInEmail, password)` / `void closeSession()` |
 | `LinkedInJobFetcher` | Orchestrates: gets session from manager, loops search pages, delegates card parsing to `JobParser`, returns unsaved `List<Job>`, always closes session in `finally`. | `List<Job> fetchJobs(UserConfig)` |
 | `JobParser` | Stateless. Two public methods: `parseCard(Locator card, String jobDescription)` → `Optional<Job>`, and `extractSalary(String text)` → `Integer`. No browser knowledge. | Pure mapping logic |
 | `SearchConfig` | JPA entity: per-user extra search filters (`remoteOnly`, `experienceLevel`, `datePostedFilter`, `maxPages`). Keywords and location are read from `UserConfig` directly — no duplication. | — |
@@ -39,19 +39,24 @@ jobFetcher.fetchJobs(config)
 ### Login
 
 ```
-PlaywrightSessionManager.createSession(linkedInEmail, decryptedPassword):
-  1. browser = Playwright.create().chromium().launch(headless=true)
-  2. page = browser.newPage()
-  3. page.navigate("https://www.linkedin.com/login")
-  4. page.fill("#username", linkedInEmail)   ← uses UserConfig.linkedInEmail (NOT .email)
-  5. page.fill("#password", decryptedPassword)
-  6. page.click("[type=submit]")
-  7. page.waitForURL("**/feed/**", timeout=10s)
+PlaywrightSessionManager.createSession(linkedInEmail, password):
+  // Plain Java class — instantiated once per fetchJobs call. Not a Spring singleton.
+  // Holds: Playwright instance, Browser, Page as instance fields.
+  1. this.playwright = Playwright.create()
+  2. this.browser = playwright.chromium().launch(headless=true)
+  3. this.page = browser.newPage()
+  4. page.navigate("https://www.linkedin.com/login")
+  5. page.fill("#username", linkedInEmail)   ← UserConfig.linkedInEmail (NOT .email)
+  6. page.fill("#password", password)        ← UserConfig.linkedInPasswordEncrypted used as-is
+                                              (no encryption util exists; field stores raw value)
+  7. page.click("[type=submit]")
+  8. page.waitForURL("**/feed/**", timeout=10s)
      → if timeout or URL contains "checkpoint" or "challenge": throw LoginFailedException
   Returns: Page (caller uses this for all subsequent navigation)
 
 PlaywrightSessionManager.closeSession():
-  Closes Page, BrowserContext, and Browser — caller must invoke in finally block.
+  Calls page.close(), browser.close(), playwright.close() — caller invokes in finally block.
+  No state remains after close; the object should not be reused.
 ```
 
 LinkedIn CAPTCHA/2FA is detected by URL pattern — bot logs the error and skips that user for the current scheduler run.
@@ -76,33 +81,42 @@ Params:
 
 ```
 LinkedInJobFetcher.fetchJobs(userConfig):
-  1. Load SearchConfig for user → if absent, log info, return empty list
-  2. Decrypt linkedInPasswordEncrypted using existing EncryptionUtil
-  3. Page page = sessionManager.createSession(userConfig.getLinkedInEmail(), decryptedPassword)
+  1. Load SearchConfig for user via searchConfigRepository.findByUserConfig(userConfig)
+     → if absent: run with defaults (remoteOnly=false, experienceLevel=null, datePostedFilter=ANY, maxPages=3)
+  2. String password = userConfig.getLinkedInPasswordEncrypted()  ← used as-is; no decryption
+  3. PlaywrightSessionManager session = new PlaywrightSessionManager()
+     Page page = session.createSession(userConfig.getLinkedInEmail(), password)
      → LoginFailedException: log error, return empty list
   4. List<Job> collected = new ArrayList<>()
      try {
-       for (int pageIndex = 0; pageIndex < searchConfig.maxPages; pageIndex++):
+       for (int pageIndex = 0; pageIndex < maxPages; pageIndex++):
          a. navigate to search URL with start = pageIndex * 25
          b. waitForSelector(".job-card-container", timeout=8s)
             → timeout: log warning, break loop
          c. for each card Locator:
               i.  click card to load detail panel
               ii. waitForSelector(".job-description__container", timeout=5s)
-                  → timeout on this card: log warning, use empty string as description, continue
+                  → timeout: log warning, set description = "", continue
               iii.String description = page.locator(".job-description__container").innerText()
               iv. Optional<Job> job = jobParser.parseCard(card, description)
-              v.  job.ifPresent(collected::add)
+              v.  if present: set job.setUserConfig(userConfig); job.setExtractedAt(LocalDateTime.now())
+              vi. job.ifPresent(collected::add)
      } finally {
-       sessionManager.closeSession()   // always closes browser
+       session.closeSession()
      }
-  5. Return collected  ← unsaved; SchedulerService runs matcher then saves matched jobs
+  5. Pre-save dedup: fetch existing linkedInJobIds for this user in one query:
+       Set<String> existing = jobRepository.findLinkedInJobIdsByUserConfig(userConfig)
+       List<Job> newJobs = collected.stream()
+         .filter(j -> !existing.contains(j.getLinkedInJobId()))
+         .toList()
+  6. Return newJobs  ← unsaved; SchedulerService runs matcher then saves matched jobs
 ```
 
 **Persistence ownership:**
-- `LinkedInJobFetcher` returns an unsaved `List<Job>` — it does **not** call `jobRepository`.
-- `SchedulerService` continues its existing flow: `jobMatcher.filterJobs(fetched, config)` → `jobRepository.save()` on matched jobs only.
-- Deduplication is handled naturally by the `@UniqueConstraint(userConfigId, linkedInJobId)` on the `jobs` table — duplicate saves throw a constraint violation which SchedulerService's outer try/catch absorbs per job.
+- `LinkedInJobFetcher` returns unsaved `List<Job>` — it does **not** call `jobRepository.save()`.
+- `SchedulerService` flow is unchanged: `jobMatcher.filterJobs(fetched, config)` → `jobRepository.save()` per matched job.
+- Dedup is done in step 5 (pre-save lookup). No reliance on constraint exceptions.
+- New repository method required: `Set<String> findLinkedInJobIdsByUserConfig(UserConfig)` — added to `JobRepository`.
 
 ---
 
@@ -178,9 +192,10 @@ public class SearchConfig {
 
 ### `Job` Entity — No Changes
 
-`applicationType` (String) already exists — use `"EASY_APPLY"` or `"EXTERNAL"` as values.  
-`salary` (Integer) already exists — store midpoint of range or extracted value.  
-`jobDescription` (TEXT) already exists — populated from job detail page.
+`applicationType` (String) — use `"EASY_APPLY"` or `"EXTERNAL"`.  
+`salary` (Integer) — store LPA midpoint or converted LPA value.  
+`jobDescription` (TEXT) — populated from job detail panel text.  
+`userConfig` + `extractedAt` — set by `LinkedInJobFetcher` in scrape loop (step 4-v) before returning.
 
 ---
 
@@ -188,7 +203,7 @@ public class SearchConfig {
 
 ### SearchConfig Endpoints
 
-`SearchConfig` is optional — if absent, the fetcher runs with no extra filters (all experience levels, any post date, not remote-only). Keywords and location always come from `UserConfig`.
+`SearchConfig` is optional. If absent the fetcher runs with default filters: `remoteOnly=false`, `experienceLevel=null` (any), `datePostedFilter=ANY`, `maxPages=3`.
 
 ```
 POST   /api/search-config
@@ -219,9 +234,10 @@ Response 204 No Content | 404 if not found
 | File | Purpose |
 |---|---|
 | `entity/SearchConfig.java` | New JPA entity |
-| `repository/SearchConfigRepository.java` | JPA repo with `findByUserConfig` |
-| `service/PlaywrightSessionManager.java` | Browser lifecycle + login |
-| `service/JobParser.java` | DOM → Job mapping, salary extraction |
+| `repository/SearchConfigRepository.java` | `Optional<SearchConfig> findByUserConfig(UserConfig)` |
+| `repository/JobRepository.java` | Add `@Query` method: `Set<String> findLinkedInJobIdsByUserConfig(UserConfig)` |
+| `service/PlaywrightSessionManager.java` | Plain Java class — browser lifecycle + login, not a Spring bean |
+| `service/JobParser.java` | `@Component` — DOM → Job mapping, salary extraction |
 | `service/LinkedInJobFetcher.java` | Replace stub — full implementation |
 | `controller/SearchConfigController.java` | REST CRUD for SearchConfig |
 
@@ -231,7 +247,7 @@ Response 204 No Content | 404 if not found
 
 | File | Change |
 |---|---|
-| `pom.xml` | Add `playwright` dependency |
+| `pom.xml` | No change — Playwright 1.40.0 already present |
 | `service/SchedulerService.java` | Change `searchJobs(config, keywords, years, location)` → `fetchJobs(config)` (one line) |
 
 ---
@@ -243,23 +259,16 @@ Response 204 No Content | 404 if not found
 | Login failure / CAPTCHA | Log error, skip user, continue scheduler |
 | Page navigation timeout | Log warning, save collected jobs, return |
 | Card parse exception | Log warning, skip card, continue |
-| No SearchConfig for user | Log info, skip fetching, return empty list |
-| Duplicate job (already in DB) | Filtered out before `saveAll` — no exception |
+| No SearchConfig for user | Run with defaults: remoteOnly=false, experienceLevel=any, datePostedFilter=ANY, maxPages=3 |
+| Duplicate job (pre-save lookup) | Filtered out in step 5 via `findLinkedInJobIdsByUserConfig` — no DB exceptions |
 
 ---
 
 ## Playwright Dependency
 
-Add to `pom.xml`:
-```xml
-<dependency>
-  <groupId>com.microsoft.playwright</groupId>
-  <artifactId>playwright</artifactId>
-  <version>1.44.0</version>
-</dependency>
-```
+Already present in `pom.xml` at version 1.40.0 — no changes needed.
 
-Playwright requires browser binaries. First run: `mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="install chromium"` — document in README.
+Playwright requires browser binaries to be installed separately. On first setup run: `mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="install chromium"` — document in README.
 
 ---
 
