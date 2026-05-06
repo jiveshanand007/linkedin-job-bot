@@ -17,12 +17,20 @@
 | Class | Responsibility | Interface |
 |---|---|---|
 | `PlaywrightSessionManager` | Owns browser open/close and LinkedIn login. Returns a ready `Page` or throws `LoginFailedException`. | `Page createSession(email, password)` / `void closeSession()` |
-| `LinkedInJobFetcher` | Orchestrates: gets session from manager, loops search pages, delegates card parsing to `JobParser`, saves to DB, always closes session in `finally`. | `List<Job> fetchJobs(UserConfig)` |
+| `LinkedInJobFetcher` | Orchestrates: gets session from manager, loops search pages, delegates card parsing to `JobParser`, returns unsaved `List<Job>`, always closes session in `finally`. | `List<Job> fetchJobs(UserConfig)` |
 | `JobParser` | Stateless. Two public methods: `parseCard(Locator card, String jobDescription)` → `Optional<Job>`, and `extractSalary(String text)` → `Integer`. No browser knowledge. | Pure mapping logic |
-| `SearchConfig` | JPA entity: per-user search parameters. Required dependency of `LinkedInJobFetcher` — not a separate subsystem. No overlap with `UserConfig` (which holds credentials + auto-apply prefs). | — |
-| `SearchConfigController` | REST CRUD so users can configure search before running scheduler. | POST/PUT/GET/DELETE |
+| `SearchConfig` | JPA entity: per-user extra search filters (`remoteOnly`, `experienceLevel`, `datePostedFilter`, `maxPages`). Keywords and location are read from `UserConfig` directly — no duplication. | — |
+| `SearchConfigController` | REST CRUD so users can configure search filters before running scheduler. | POST/PUT/GET/DELETE |
 
-**Integration:** `SchedulerService` calls `LinkedInJobFetcher.fetchJobs(UserConfig)` — exact same call site as the stub. No changes to `SchedulerService`.
+**Integration — SchedulerService call site changes (one line):**
+```
+// Before (stub):
+jobFetcher.searchJobs(config, config.getJobKeywords(), config.getYearsExperienceMax(), config.getLocation())
+
+// After (Phase 3a):
+jobFetcher.fetchJobs(config)
+```
+`LinkedInJobFetcher` returns unsaved `List<Job>`. `SchedulerService` continues to run `jobMatcher.filterJobs()` then `jobRepository.save()` on matched jobs — **persistence ownership is unchanged**.
 
 ---
 
@@ -31,13 +39,19 @@
 ### Login
 
 ```
-PlaywrightSessionManager.login(page, email, decryptedPassword):
-  1. page.navigate("https://www.linkedin.com/login")
-  2. page.fill("#username", email)
-  3. page.fill("#password", password)
-  4. page.click("[type=submit]")
-  5. page.waitForURL("**/feed/**", timeout=10s)
+PlaywrightSessionManager.createSession(linkedInEmail, decryptedPassword):
+  1. browser = Playwright.create().chromium().launch(headless=true)
+  2. page = browser.newPage()
+  3. page.navigate("https://www.linkedin.com/login")
+  4. page.fill("#username", linkedInEmail)   ← uses UserConfig.linkedInEmail (NOT .email)
+  5. page.fill("#password", decryptedPassword)
+  6. page.click("[type=submit]")
+  7. page.waitForURL("**/feed/**", timeout=10s)
      → if timeout or URL contains "checkpoint" or "challenge": throw LoginFailedException
+  Returns: Page (caller uses this for all subsequent navigation)
+
+PlaywrightSessionManager.closeSession():
+  Closes Page, BrowserContext, and Browser — caller must invoke in finally block.
 ```
 
 LinkedIn CAPTCHA/2FA is detected by URL pattern — bot logs the error and skips that user for the current scheduler run.
@@ -47,12 +61,15 @@ LinkedIn CAPTCHA/2FA is detected by URL pattern — bot logs the error and skips
 ```
 Base: https://www.linkedin.com/jobs/search/
 Params:
-  keywords     → SearchConfig.keywords (URL-encoded)
-  location     → SearchConfig.location
-  f_WT=2       → remoteOnly (omitted if false)
-  f_E=1,2,3    → experienceLevel mapping (ENTRY=1, MID=3, SENIOR=4, DIRECTOR=5)
+  keywords     → UserConfig.jobKeywords (URL-encoded)       ← from UserConfig, not SearchConfig
+  location     → UserConfig.location                        ← from UserConfig, not SearchConfig
+  f_WT=2       → SearchConfig.remoteOnly=true (omitted if false)
+  f_E=<value>  → SearchConfig.experienceLevel mapping:
+                   ENTRY=2, MID=4, SENIOR=4, DIRECTOR=5    ← LinkedIn API values (not 1/3/4/5)
+                   null → param omitted (any level)
   f_TPR=r86400 → PAST_DAY; r604800=PAST_WEEK; r2592000=PAST_MONTH; omitted=ANY
-  start=0,25,50→ pagination offset (25 results per page)
+  start=N      → pagination: N = pageIndex * 25, pageIndex ∈ [0, maxPages-1]
+                 maxPages=3 → start=0,25,50 → up to 75 results total (exclusive upper bound)
 ```
 
 ### Scrape Loop
@@ -61,36 +78,31 @@ Params:
 LinkedInJobFetcher.fetchJobs(userConfig):
   1. Load SearchConfig for user → if absent, log info, return empty list
   2. Decrypt linkedInPasswordEncrypted using existing EncryptionUtil
-  3. Page page = sessionManager.createSession(email, decryptedPassword)
+  3. Page page = sessionManager.createSession(userConfig.getLinkedInEmail(), decryptedPassword)
      → LoginFailedException: log error, return empty list
-  4. try {
-       For page 0..searchConfig.maxPages (default 3):
-         a. navigate to search URL with start=page*25 offset
+  4. List<Job> collected = new ArrayList<>()
+     try {
+       for (int pageIndex = 0; pageIndex < searchConfig.maxPages; pageIndex++):
+         a. navigate to search URL with start = pageIndex * 25
          b. waitForSelector(".job-card-container", timeout=8s)
-            → timeout: log warning, break loop (save what was already collected)
+            → timeout: log warning, break loop
          c. for each card Locator:
               i.  click card to load detail panel
               ii. waitForSelector(".job-description__container", timeout=5s)
+                  → timeout on this card: log warning, use empty string as description, continue
               iii.String description = page.locator(".job-description__container").innerText()
               iv. Optional<Job> job = jobParser.parseCard(card, description)
-              v.  collect non-empty results
+              v.  job.ifPresent(collected::add)
      } finally {
-       sessionManager.closeSession()  // always closes browser
+       sessionManager.closeSession()   // always closes browser
      }
-  5. Dedup: filter out linkedInJobIds already in JobRepository for this user
-  6. Set extractedAt=now(), userConfig=userConfig on each new Job
-  7. jobRepository.saveAll(newJobs)
-  8. Return saved jobs list
+  5. Return collected  ← unsaved; SchedulerService runs matcher then saves matched jobs
 ```
 
-**Who owns what:**
-- `PlaywrightSessionManager` creates/destroys the Playwright `Browser` and `BrowserContext` — `LinkedInJobFetcher` never touches these directly.
-- `LinkedInJobFetcher` owns page navigation and detail-panel click-through.
-- `JobParser` receives a card `Locator` + the pre-fetched description `String` — it has no `Page` reference.
-
-If login fails → log error, return empty list.  
-If individual card parse fails → log warning, skip card, continue.  
-If detail panel times out for a specific card → log warning, pass empty string as description, continue (salary will be null).
+**Persistence ownership:**
+- `LinkedInJobFetcher` returns an unsaved `List<Job>` — it does **not** call `jobRepository`.
+- `SchedulerService` continues its existing flow: `jobMatcher.filterJobs(fetched, config)` → `jobRepository.save()` on matched jobs only.
+- Deduplication is handled naturally by the `@UniqueConstraint(userConfigId, linkedInJobId)` on the `jobs` table — duplicate saves throw a constraint violation which SchedulerService's outer try/catch absorbs per job.
 
 ---
 
@@ -113,18 +125,25 @@ Stateless `@Component`. Two public methods, no browser dependencies.
 
 **`Integer extractSalary(String text)`**
 
+All salaries are normalised to **LPA** before storage so that `UserConfig.minSalaryLPA` filtering is consistent regardless of the job's original currency. USD is converted using a fixed constant `USD_ANNUAL_TO_LPA = 0.083` (≈ $1 = ₹83, 1 LPA = ₹1,00,000).
+
 The method searches `text` for salary patterns in this order:
 
-1. **Range pattern** — regex `([\d.]+)\s*[–\-to]+\s*([\d.]+)\s*LPA`: captures both bounds, returns `(low + high) / 2` as integer. Example: "₹12–18 LPA" → min=12, max=18 → returns `15`.
-2. **Single value** — regex `([\d.]+)\s*LPA`: returns the matched value as integer. Example: "15 LPA" → returns `15`.
-3. **USD range** — regex `\$([\d,]+)[Kk]?\s*[–\-]\s*\$([\d,]+)[Kk]?`: parse both, strip commas, handle K suffix, average. Example: "$80K–$120K" → returns `100` (stored as-is; unit noted in salary field, LPA conversion out of scope).
-4. **No match** → return `null`.
+1. **INR range (LPA)** — regex `([\d.]+)\s*[–\-to]+\s*([\d.]+)\s*LPA`: average the two bounds → store as integer. Example: "₹12–18 LPA" → `(12+18)/2` → `15`.
+2. **INR single (LPA)** — regex `([\d.]+)\s*LPA`: use value directly. Example: "15 LPA" → `15`.
+3. **USD range** — regex `\$([\d,]+)[Kk]?\s*[–\-]\s*\$([\d,]+)[Kk]?`: strip commas, expand K suffix (×1000), average the two bounds, then multiply by `USD_ANNUAL_TO_LPA`. Example: "$80K–$120K" → avg=$100,000 → `100000 × 0.083` → `83` LPA.
+4. **USD single** — regex `\$([\d,]+)[Kk]?`: same conversion. Example: "$90K" → `90000 × 0.083` → `74` LPA.
+5. **No match** → return `null`.
+
+`USD_ANNUAL_TO_LPA = 0.083` is a constant in `JobParser` — easy to update if needed.
 
 ---
 
 ## Data Model
 
 ### New Entity: `SearchConfig`
+
+`SearchConfig` holds extra search filters only. Keywords and location come from `UserConfig` (single source of truth — no duplication).
 
 ```java
 @Entity
@@ -137,23 +156,17 @@ public class SearchConfig {
     @JoinColumn(name = "user_config_id", nullable = false, unique = true)
     private UserConfig userConfig;
 
-    @Column(nullable = false)
-    private String keywords;       // e.g. "Java backend developer"
-
-    @Column(nullable = false)
-    private String location;       // e.g. "Bengaluru"
-
     @Column
     private Boolean remoteOnly = false;
 
     @Column
-    private String experienceLevel; // ENTRY | MID | SENIOR | DIRECTOR | null (any)
+    private String experienceLevel; // ENTRY | MID | SENIOR | DIRECTOR | null = any
 
     @Column
-    private String datePostedFilter; // PAST_DAY | PAST_WEEK | PAST_MONTH | ANY
+    private String datePostedFilter; // PAST_DAY | PAST_WEEK | PAST_MONTH | ANY (default ANY)
 
     @Column
-    private Integer maxPages = 3;  // scrape up to N result pages (25 results each)
+    private Integer maxPages = 3;   // [1..10]; 3 → up to 75 results per run
 
     @Column
     private LocalDateTime createdAt;
@@ -175,19 +188,21 @@ public class SearchConfig {
 
 ### SearchConfig Endpoints
 
-`SearchConfig` is a required dependency of `LinkedInJobFetcher` — without it the fetcher has no keywords or filters. It does not duplicate `UserConfig` fields (`UserConfig` holds credentials and auto-apply preferences; `SearchConfig` holds job search parameters).
+`SearchConfig` is optional — if absent, the fetcher runs with no extra filters (all experience levels, any post date, not remote-only). Keywords and location always come from `UserConfig`.
 
 ```
 POST   /api/search-config
-Body:  { "userConfigId": 1, "keywords": "Java developer", "location": "Bengaluru",
-         "remoteOnly": false, "experienceLevel": "MID", "datePostedFilter": "PAST_WEEK",
-         "maxPages": 3 }
-Validation: keywords + location required; experienceLevel ∈ {ENTRY,MID,SENIOR,DIRECTOR,null};
-            datePostedFilter ∈ {PAST_DAY,PAST_WEEK,PAST_MONTH,ANY}; maxPages ∈ [1..10]
+Body:  { "userConfigId": 1, "remoteOnly": false, "experienceLevel": "MID",
+         "datePostedFilter": "PAST_WEEK", "maxPages": 3 }
+Validation: userConfigId required; all filter fields optional with defaults shown above;
+            experienceLevel ∈ {ENTRY,MID,SENIOR,DIRECTOR,null};
+            datePostedFilter ∈ {PAST_DAY,PAST_WEEK,PAST_MONTH,ANY};
+            maxPages ∈ [1..10]
 Response 201: SearchConfig JSON | 409 if SearchConfig already exists for userConfigId
 
 PUT    /api/search-config/{id}
-Body:  same fields (partial update — only provided fields updated)
+Body:  any subset of filter fields (only provided fields updated; omitted fields unchanged)
+       No required fields — all are optional for partial update
 Response 200: updated SearchConfig JSON | 404 if not found
 
 GET    /api/search-config/user/{userConfigId}
@@ -217,7 +232,7 @@ Response 204 No Content | 404 if not found
 | File | Change |
 |---|---|
 | `pom.xml` | Add `playwright` dependency |
-| `service/SchedulerService.java` | No signature change — fetcher now returns real jobs |
+| `service/SchedulerService.java` | Change `searchJobs(config, keywords, years, location)` → `fetchJobs(config)` (one line) |
 
 ---
 
