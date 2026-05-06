@@ -38,6 +38,12 @@ public class UserConfig {
     private Boolean autoApplyEnabled = false;
 
     @Column
+    private String phoneNumber;
+
+    @Column(nullable = false, columnDefinition = "BOOLEAN DEFAULT false")
+    private boolean schedulerActive = false;
+
+    @Column
     private LocalDateTime createdAt;
 
     @Column
@@ -63,6 +69,10 @@ public class UserConfig {
     public void setLocation(String location) { this.location = location; }
     public Boolean getAutoApplyEnabled() { return autoApplyEnabled; }
     public void setAutoApplyEnabled(Boolean enabled) { this.autoApplyEnabled = enabled; }
+    public String getPhoneNumber() { return phoneNumber; }
+    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+    public boolean isSchedulerActive() { return schedulerActive; }
+    public void setSchedulerActive(boolean schedulerActive) { this.schedulerActive = schedulerActive; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
