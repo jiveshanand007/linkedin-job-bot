@@ -53,10 +53,30 @@ public class SchedulerController {
     @PostMapping("/stop")
     public ResponseEntity<?> stopScheduler(@RequestParam Long userId) {
         try {
-            logger.info("Scheduler stop requested for user: {}", userId);
-            return ResponseEntity.ok(Map.of("status", "stopped"));
+            UserConfig config = userConfigRepository.findById(userId).orElse(null);
+            if (config == null) return ResponseEntity.notFound().build();
+            config.setSchedulerActive(false);
+            userConfigRepository.save(config);
+            logger.info("Scheduler deactivated for user {}", userId);
+            return ResponseEntity.ok(Map.of("status", "stopped", "userId", userId));
         } catch (Exception e) {
-            logger.error("Error stopping scheduler", e);
+            logger.error("Error stopping scheduler for user {}", userId, e);
+            return ResponseEntity.badRequest().body("Error: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/status")
+    public ResponseEntity<?> getStatus(@RequestParam Long userId) {
+        try {
+            UserConfig config = userConfigRepository.findById(userId).orElse(null);
+            if (config == null) return ResponseEntity.notFound().build();
+            return ResponseEntity.ok(Map.of(
+                "userId", userId,
+                "schedulerActive", config.isSchedulerActive(),
+                "autoApplyEnabled", Boolean.TRUE.equals(config.getAutoApplyEnabled())
+            ));
+        } catch (Exception e) {
+            logger.error("Error getting scheduler status for user {}", userId, e);
             return ResponseEntity.badRequest().body("Error: " + e.getMessage());
         }
     }
