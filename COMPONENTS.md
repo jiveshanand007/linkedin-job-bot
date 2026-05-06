@@ -138,47 +138,39 @@ Map<String, Object> executeRun(Long userId)
 - JobMatcher
 - JobRepository
 - UserConfigRepository
-- ResumeTailor (Phase 3)
+- ResumeRepository
+- ResumeTailor ✅ (Phase 2)
 - ApplicationSubmitter (Phase 3)
 
 ---
 
-### 4. ResumeTailor (Phase 2 - NOT YET IMPLEMENTED)
+### 4. ResumeTailor (Phase 2 - COMPLETE ✅)
 
 **File:** `src/main/java/com/jobbot/service/ResumeTailor.java`
 
-**Responsibility:** Generate tailored resumes & cover letters using Claude
+**Responsibility:** Tailor a base LaTeX resume to a specific job using Claude API, persist the result.
 
-**Planned Methods:**
+**Methods:**
 ```java
-String generateTailoredResume(Resume baseResume, Job job)
-String generateCoverLetter(Resume baseResume, Job job)
+Optional<Resume> tailorAndSave(Job job, Resume baseResume)
 ```
 
 **Inputs:**
-- `baseResume` - Base LaTeX resume from database
-- `job` - Job with description/requirements
+- `job` - Job with title, company, jobDescription
+- `baseResume` - Active base LaTeX resume from database
 
 **Outputs:**
-- Tailored LaTeX code (ready for compilation)
-- Compiled PDF
-- Cover letter (markdown/text)
+- `Optional<Resume>` — populated with the saved tailored resume on success, empty on failure
 
-**Phase 2 Implementation Plan:**
-1. Parse base LaTeX resume into sections
-2. Create Claude prompt: "Select relevant projects and rewrite for this JD"
-3. Send to Claude API with:
-   - Full base resume
-   - Full job description
-4. Claude returns tailored LaTeX
-5. Compile LaTeX to PDF using pdflatex
-6. Generate cover letter separately
-7. Store PDF path & artifacts
+**What It Does:**
+1. Sends base LaTeX + job details to Claude via `ClaudeApiClient`
+2. Claude rewrites summary, skills list, and experience bullets to match the JD
+3. Saves tailored LaTeX as a new `Resume` row (`isActive=false`, `parentResumeId` set)
+4. Returns the saved entity; returns `Optional.empty()` on any failure (non-throwing)
 
 **Dependencies:**
-- Claude API
-- LaTeXCompiler utility
-- HttpClient
+- ClaudeApiClient
+- ResumeRepository
 
 ---
 
@@ -380,17 +372,19 @@ save(AuditLog)
 
 ## Summary Table
 
-| Component | Phase | Status | Lines | Purpose |
-|-----------|-------|--------|-------|---------|
-| LinkedInJobFetcher | 2 | Placeholder | 50 | Search LinkedIn |
-| JobMatcher | 1 | ✅ Complete | 60 | Filter jobs |
-| SchedulerService | 1,3,4 | Partial | 55 | Orchestrate pipeline |
-| ResumeTailor | 2 | TODO | 0 | AI resume tailoring |
-| ApplicationSubmitter | 3 | TODO | 0 | Submit applications |
-| ConfigController | 1 | ✅ Complete | 75 | Setup API |
-| SchedulerController | 1,4 | Partial | 45 | Trigger API |
-| 5 Entities | 1 | ✅ Complete | 300 | Data models |
-| 5 Repositories | 1 | ✅ Complete | 50 | Data access |
+| Component | Phase | Status | Purpose |
+|-----------|-------|--------|---------|
+| LinkedInJobFetcher | 3 | Stub | Search LinkedIn |
+| JobMatcher | 1 | ✅ Complete | Filter jobs |
+| SchedulerService | 1,2 | ✅ Updated | Orchestrate pipeline |
+| ClaudeApiClient | 2 | ✅ Complete | Anthropic API HTTP client |
+| ResumeTailor | 2 | ✅ Complete | AI resume tailoring |
+| ApplicationSubmitter | 3 | TODO | Submit applications |
+| ConfigController | 1 | ✅ Complete | Setup API |
+| ResumeController | 2 | ✅ Complete | Tailor API |
+| SchedulerController | 1,4 | Partial | Trigger API |
+| 5 Entities | 1,2 | ✅ Updated | Data models |
+| 5 Repositories | 1,2 | ✅ Updated | Data access |
 
 ---
 

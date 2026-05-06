@@ -76,6 +76,8 @@ Stores LaTeX resumes for each user.
 | version_name | VARCHAR(255) | NO | "v1", "backend-focus", etc |
 | latex_content | LONGTEXT | NO | Full LaTeX resume code |
 | is_active | BOOLEAN | NO | Currently in use? |
+| parent_resume_id | BIGINT | YES | FK → resumes.id — null for base resumes, set for tailored versions |
+| job_id           | BIGINT | YES | FK → jobs.id — which job this resume was tailored for |
 | uploaded_at | TIMESTAMP | YES | When uploaded |
 | updated_at | TIMESTAMP | YES | Last modification |
 

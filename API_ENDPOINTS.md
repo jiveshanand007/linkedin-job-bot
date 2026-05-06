@@ -297,13 +297,39 @@ curl -X POST "http://localhost:8080/api/scheduler/stop?userId=1"
 
 ---
 
-## Phase 2+ APIs (Not Yet Implemented)
+## Phase 2 APIs
 
-### Tailor Resume (Phase 2)
+### Tailor Resume
+
+**Endpoint:** `POST /api/resumes/tailor?resumeId=1&jobId=5`
+
+**Purpose:** Tailor a specific resume for a specific job using Claude API. Stores the tailored LaTeX as a new resume version.
+
+**Request:**
+```bash
+curl -X POST "http://localhost:8080/api/resumes/tailor?resumeId=1&jobId=5"
 ```
-POST /api/resumes/tailor?resumeId=1&jobId=5
-  → Returns tailored LaTeX + PDF + cover letter
+
+**Response (200):**
+```json
+{
+  "resumeId": 99,
+  "versionName": "tailored-for-5",
+  "latexContent": "\\documentclass{article}..."
+}
 ```
+
+**Response (400):** `{ "error": "Resume not found: 1" }` or `{ "error": "Job not found: 5" }`  
+**Response (500):** `{ "error": "Tailoring failed — check logs" }`
+
+**Notes:**
+- Uses the base resume specified by `resumeId`
+- Tailoring also runs automatically during `POST /api/scheduler/run`
+- Tailored resumes have `isActive=false` and `versionName="tailored-for-{jobId}"`
+
+---
+
+## Phase 3+ APIs (Not Yet Implemented)
 
 ### Get Application History (Phase 4)
 ```

@@ -8,9 +8,9 @@
 3. Applies to jobs automatically with tailored documents
 4. Tracks all applications with audit logs
 
-**Status:** Phase 1 Complete (Backend core setup)  
+**Status:** Phase 1 ✅ Complete | Phase 2 ✅ Complete | Phase 3-5 ⏳  
 **Tech Stack:** Java 17, Spring Boot 3.2, SQLite, Playwright, Claude API  
-**Codebase:** 16 Java files, 663 lines  
+**Codebase:** 20 Java files
 
 ---
 
@@ -19,34 +19,34 @@
 ```
 linkedin-job-bot/
 ├── pom.xml                          # Maven dependencies & build config
-├── README.md                        # This file
+├── README.md                        # This file — start here
 ├── ARCHITECTURE.md                  # System design & data flow
 ├── COMPONENTS.md                    # Detailed component descriptions
 ├── API_ENDPOINTS.md                 # REST API reference
-├── DATABASE_SCHEMA.md               # Entity relationships
-├── PHASE1_COMPLETE.md               # Phase 1 completion details
+├── DATABASE_SCHEMA.md               # Entity relationships & schema
+├── docs/superpowers/
+│   ├── specs/                       # Design specs per phase
+│   └── plans/                       # Implementation plans per phase
 ├── src/main/
 │   ├── java/com/jobbot/
-│   │   ├── LinkedInJobBotApplication.java  # Entry point
-│   │   ├── config/                  # Spring configurations (empty - Phase 2+)
+│   │   ├── LinkedInJobBotApplication.java
+│   │   ├── config/
+│   │   │   └── ClaudeApiConfig.java        # Claude API + RestTemplate bean
 │   │   ├── controller/
 │   │   │   ├── ConfigController.java       # Setup & resume APIs
-│   │   │   └── SchedulerController.java    # Job search & scheduling APIs
+│   │   │   ├── SchedulerController.java    # Job search & scheduling APIs
+│   │   │   └── ResumeController.java       # Resume tailor API
 │   │   ├── service/
-│   │   │   ├── LinkedInJobFetcher.java     # LinkedIn automation (Playwright)
+│   │   │   ├── LinkedInJobFetcher.java     # LinkedIn automation (stub → Phase 3)
 │   │   │   ├── JobMatcher.java             # Filter jobs by criteria
-│   │   │   └── SchedulerService.java       # Orchestrate pipeline
+│   │   │   ├── SchedulerService.java       # Orchestrate pipeline
+│   │   │   ├── ClaudeApiClient.java        # Anthropic API HTTP client
+│   │   │   └── ResumeTailor.java           # AI resume tailoring
 │   │   ├── entity/                  # JPA entities (5 classes)
-│   │   │   ├── UserConfig.java
-│   │   │   ├── Resume.java
-│   │   │   ├── Job.java
-│   │   │   ├── Application.java
-│   │   │   └── AuditLog.java
 │   │   └── repository/              # Data access layer (5 interfaces)
 │   └── resources/
-│       └── application.properties    # Spring Boot configuration
-├── src/test/                        # Tests (Phase 5)
-└── .git/                            # Git repository
+│       └── application.properties
+└── src/test/                        # Tests (Phase 5)
 
 ```
 
@@ -72,40 +72,23 @@ linkedin-job-bot/
 - Database schema with 5 JPA entities
 - JobMatcher service (filters jobs)
 - REST APIs for configuration & manual triggers
-- Basic skeleton in place for future phases
 
-**What works:**
-- User configuration setup
-- Resume upload/storage
-- Job filtering logic
-- Database persistence
-
-**What's NOT implemented yet:**
-- LinkedIn automation (Playwright)
-- Resume tailoring (Claude API)
-- Application submission
-- Hourly scheduling
-
-### ⏳ Phase 2: Resume Tailoring (TODO)
-- Claude API integration
-- LaTeX parsing & modification
-- pdflatex compilation to PDF
-- Resume tailoring endpoint
+### ✅ Phase 2: Resume Tailoring (COMPLETE)
+- `ClaudeApiConfig` — RestTemplate bean + API key config
+- `ClaudeApiClient` — raw HTTP client for Anthropic messages API
+- `ResumeTailor` — tailors LaTeX per job, stores result as new Resume row
+- `ResumeController` — `POST /api/resumes/tailor?resumeId=1&jobId=5`
+- `SchedulerService` updated — auto-tailors for each matched job per run
 
 ### ⏳ Phase 3: Application Submission (TODO)
-- Easy Apply automation
-- External form filling
-- Claude-assisted field detection
+- LinkedInJobFetcher — real Playwright automation
+- ApplicationSubmitter — Easy Apply + external form filling
 
 ### ⏳ Phase 4: Full Automation (TODO)
-- Quartz scheduler setup
-- Hourly job runs
-- End-to-end pipeline
+- Quartz scheduler (hourly runs)
+- Application history & audit log endpoints
 
 ### ⏳ Phase 5: Testing & Deployment (TODO)
-- Unit tests
-- Integration tests
-- Production deployment
 
 ---
 

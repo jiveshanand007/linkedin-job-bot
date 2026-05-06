@@ -4,9 +4,9 @@
 
 **Goal:** Integrate Claude API resume tailoring into the LinkedIn job bot so every matched job gets a LaTeX resume tailored to its description, stored in the database.
 
-**Architecture:** `ClaudeApiClient` makes raw HTTP calls to Anthropic's messages API. `ResumeTailor` orchestrates the call and persists the tailored `Resume` entity. `SchedulerService` calls `ResumeTailor` for each matched job after saving them. A `ResumeController` exposes an on-demand tailor endpoint.
+**Architecture:** `ClaudeApiClient` makes raw HTTP calls to Anthropic's messages API. `ResumeTailor` orchestrates the call and persists the tailored `Resume` entity. `SchedulerService` calls `ResumeTailor` for each matched job after saving them. A `ResumeController` exposes an on-demand tailor endpoint aligned with the existing API docs.
 
-**Tech Stack:** Java 17, Spring Boot 3.2, Spring RestTemplate, Jackson ObjectMapper, JUnit 5, Mockito
+**Tech Stack:** Java 17, Spring Boot 3.2, Spring RestTemplate, Jackson ObjectMapper
 
 **Spec:** `docs/superpowers/specs/2026-05-06-phase2-resume-tailoring-design.md`
 
@@ -20,51 +20,10 @@
 
 **Files:**
 - Modify: `src/main/java/com/jobbot/entity/Resume.java`
-- Test: `src/test/java/com/jobbot/entity/ResumeEntityTest.java`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Add two new fields to `Resume.java`**
 
-Create `src/test/java/com/jobbot/entity/ResumeEntityTest.java`:
-
-```java
-package com.jobbot.entity;
-
-import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
-
-class ResumeEntityTest {
-
-    @Test
-    void tailoredResumeFields_canBeSetAndRead() {
-        Resume resume = new Resume();
-        resume.setParentResumeId(1L);
-        resume.setJobId(42L);
-
-        assertEquals(1L, resume.getParentResumeId());
-        assertEquals(42L, resume.getJobId());
-    }
-
-    @Test
-    void newResume_hasNullTailoringFields() {
-        Resume resume = new Resume();
-        assertNull(resume.getParentResumeId());
-        assertNull(resume.getJobId());
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-cd linkedin-job-bot
-mvn test -Dtest=ResumeEntityTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — `getParentResumeId()` and `getJobId()` methods don't exist.
-
-- [ ] **Step 3: Add fields to `Resume.java`**
-
-Add after the existing `@Column private LocalDateTime updatedAt;` field:
+Add after the existing `private LocalDateTime updatedAt;` field:
 
 ```java
 @Column
@@ -83,19 +42,36 @@ public Long getJobId() { return jobId; }
 public void setJobId(Long id) { this.jobId = id; }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Update `DATABASE_SCHEMA.md` to document new Resume fields**
 
-```bash
-mvn test -Dtest=ResumeEntityTest -q 2>&1 | tail -10
+In `DATABASE_SCHEMA.md`, find the `resumes` table columns section and add two new rows:
+
+```
+| parent_resume_id | BIGINT | YES | FK → resumes.id — null for base resumes, set for tailored versions |
+| job_id           | BIGINT | YES | FK → jobs.id — which job this resume was tailored for |
 ```
 
-Expected: BUILD SUCCESS, 2 tests passed.
+Also add a note under the table:
+```
+**Tailored Resumes:**
+- `is_active` = false for all tailored resumes (only base resumes are active)
+- `version_name` = "tailored-for-{jobId}" for auto-generated resumes
+- `parent_resume_id` links back to the base resume used as source
+```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Compile to verify**
 
 ```bash
-git add src/main/java/com/jobbot/entity/Resume.java \
-        src/test/java/com/jobbot/entity/ResumeEntityTest.java
+cd linkedin-job-bot
+mvn compile -q 2>&1 | tail -5
+```
+
+Expected: BUILD SUCCESS
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main/java/com/jobbot/entity/Resume.java DATABASE_SCHEMA.md
 git commit -m "feat: add parentResumeId and jobId fields to Resume entity
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -107,98 +83,11 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Modify: `src/main/java/com/jobbot/repository/ResumeRepository.java`
-- Test: `src/test/java/com/jobbot/repository/ResumeRepositoryTest.java`
 
-- [ ] **Step 1: Write failing test**
-
-Create `src/test/java/com/jobbot/repository/ResumeRepositoryTest.java`:
-
-```java
-package com.jobbot.repository;
-
-import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import java.time.LocalDateTime;
-import java.util.Optional;
-import static org.junit.jupiter.api.Assertions.*;
-
-@DataJpaTest
-class ResumeRepositoryTest {
-
-    @Autowired
-    private ResumeRepository resumeRepository;
-
-    @Autowired
-    private com.jobbot.repository.UserConfigRepository userConfigRepository;
-
-    @Test
-    void findFirstActiveByUserConfig_returnsActiveResume() {
-        UserConfig config = new UserConfig();
-        config.setEmail("test@test.com");
-        config.setLinkedInEmail("test@linkedin.com");
-        config.setLinkedInPasswordEncrypted("encrypted-pass");
-        config.setJobKeywords("Java");
-        config.setMinSalaryLPA(10);
-        config.setYearsExperienceMax(3);
-        config.setLocation("Bangalore");
-        config.setCreatedAt(LocalDateTime.now());
-        userConfigRepository.save(config);
-
-        Resume resume = new Resume();
-        resume.setUserConfig(config);
-        resume.setVersionName("base");
-        resume.setLatexContent("\\documentclass{article}");
-        resume.setIsActive(true);
-        resume.setUploadedAt(LocalDateTime.now());
-        resumeRepository.save(resume);
-
-        Optional<Resume> found = resumeRepository.findFirstByUserConfigAndIsActive(config, true);
-        assertTrue(found.isPresent());
-        assertEquals("base", found.get().getVersionName());
-    }
-
-    @Test
-    void findFirstActiveByUserConfig_returnsEmpty_whenNoneActive() {
-        UserConfig config = new UserConfig();
-        config.setEmail("none@test.com");
-        config.setLinkedInEmail("none@linkedin.com");
-        config.setLinkedInPasswordEncrypted("encrypted-pass");
-        config.setJobKeywords("Java");
-        config.setMinSalaryLPA(10);
-        config.setYearsExperienceMax(3);
-        config.setLocation("Bangalore");
-        config.setCreatedAt(LocalDateTime.now());
-        userConfigRepository.save(config);
-
-        Optional<Resume> found = resumeRepository.findFirstByUserConfigAndIsActive(config, true);
-        assertFalse(found.isPresent());
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-mvn test -Dtest=ResumeRepositoryTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — method `findFirstByUserConfigAndIsActive` doesn't exist.
-
-- [ ] **Step 3: Add method to `ResumeRepository`**
-
-Add to `ResumeRepository.java`:
-
-```java
-import java.util.Optional;
-
-// Add to interface body:
-Optional<Resume> findFirstByUserConfigAndIsActive(UserConfig config, Boolean active);
-```
+- [ ] **Step 1: Add `findFirstByUserConfigAndIsActive` to `ResumeRepository`**
 
 Full updated file:
+
 ```java
 package com.jobbot.repository;
 
@@ -215,19 +104,18 @@ public interface ResumeRepository extends JpaRepository<Resume, Long> {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Compile to verify**
 
 ```bash
-mvn test -Dtest=ResumeRepositoryTest -q 2>&1 | tail -10
+mvn compile -q 2>&1 | tail -5
 ```
 
-Expected: BUILD SUCCESS, 2 tests passed.
+Expected: BUILD SUCCESS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/main/java/com/jobbot/repository/ResumeRepository.java \
-        src/test/java/com/jobbot/repository/ResumeRepositoryTest.java
+git add src/main/java/com/jobbot/repository/ResumeRepository.java
 git commit -m "feat: add findFirstByUserConfigAndIsActive to ResumeRepository
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -240,73 +128,17 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 **Files:**
 - Modify: `src/main/resources/application.properties`
 - Create: `src/main/java/com/jobbot/config/ClaudeApiConfig.java`
-- Test: `src/test/java/com/jobbot/config/ClaudeApiConfigTest.java`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Add two missing properties to `application.properties`**
 
-Create `src/test/java/com/jobbot/config/ClaudeApiConfigTest.java`:
-
-```java
-package com.jobbot.config;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.web.client.RestTemplate;
-import static org.junit.jupiter.api.Assertions.*;
-
-@SpringBootTest
-class ClaudeApiConfigTest {
-
-    @Autowired
-    private ClaudeApiConfig claudeApiConfig;
-
-    @Autowired
-    private RestTemplate claudeRestTemplate;
-
-    @Test
-    void claudeRestTemplate_isProvided() {
-        assertNotNull(claudeRestTemplate);
-    }
-
-    @Test
-    void claudeApiConfig_readsApiKey() {
-        assertNotNull(claudeApiConfig.getApiKey());
-        assertFalse(claudeApiConfig.getApiKey().isBlank());
-    }
-
-    @Test
-    void claudeApiConfig_readsModel() {
-        assertNotNull(claudeApiConfig.getModel());
-        assertFalse(claudeApiConfig.getModel().isBlank());
-    }
-
-    @Test
-    void claudeApiConfig_readsApiUrl() {
-        assertNotNull(claudeApiConfig.getApiUrl());
-        assertTrue(claudeApiConfig.getApiUrl().startsWith("https://"));
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-mvn test -Dtest=ClaudeApiConfigTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — `ClaudeApiConfig` class doesn't exist.
-
-- [ ] **Step 3: Add config properties to `application.properties`**
-
-Add these lines to `src/main/resources/application.properties` (the `claude.api.key` line already exists — add the two new ones below it):
+The file already has `claude.api.key`. Add below it:
 
 ```properties
 claude.model=claude-haiku-4-5
 claude.api.url=https://api.anthropic.com/v1/messages
 ```
 
-- [ ] **Step 4: Create `ClaudeApiConfig.java`**
+- [ ] **Step 2: Create `ClaudeApiConfig.java`**
 
 Create `src/main/java/com/jobbot/config/ClaudeApiConfig.java`:
 
@@ -335,26 +167,26 @@ public class ClaudeApiConfig {
     public String getApiUrl() { return apiUrl; }
 
     @Bean
+    @org.springframework.context.annotation.Primary
     public RestTemplate claudeRestTemplate() {
         return new RestTemplate();
     }
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 3: Compile to verify**
 
 ```bash
-mvn test -Dtest=ClaudeApiConfigTest -q 2>&1 | tail -10
+mvn compile -q 2>&1 | tail -5
 ```
 
-Expected: BUILD SUCCESS, 4 tests passed.
+Expected: BUILD SUCCESS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/main/resources/application.properties \
-        src/main/java/com/jobbot/config/ClaudeApiConfig.java \
-        src/test/java/com/jobbot/config/ClaudeApiConfigTest.java
+        src/main/java/com/jobbot/config/ClaudeApiConfig.java
 git commit -m "feat: add Claude API configuration and RestTemplate bean
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -370,101 +202,8 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Create: `src/main/java/com/jobbot/service/ClaudeApiClient.java`
-- Test: `src/test/java/com/jobbot/service/ClaudeApiClientTest.java`
 
-- [ ] **Step 1: Write failing test**
-
-Create `src/test/java/com/jobbot/service/ClaudeApiClientTest.java`:
-
-```java
-package com.jobbot.service;
-
-import com.jobbot.config.ClaudeApiConfig;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class ClaudeApiClientTest {
-
-    @Mock
-    private RestTemplate claudeRestTemplate;
-
-    @Mock
-    private ClaudeApiConfig claudeApiConfig;
-
-    @InjectMocks
-    private ClaudeApiClient claudeApiClient;
-
-    @BeforeEach
-    void setup() {
-        when(claudeApiConfig.getApiKey()).thenReturn("test-key");
-        when(claudeApiConfig.getModel()).thenReturn("claude-haiku-4-5");
-        when(claudeApiConfig.getApiUrl()).thenReturn("https://api.anthropic.com/v1/messages");
-    }
-
-    @Test
-    void rewriteResume_returnsModifiedLatex() {
-        String fakeResponse = """
-            {
-              "content": [{"type": "text", "text": "\\\\documentclass{article} TAILORED"}]
-            }
-            """;
-        ResponseEntity<String> mockResp = new ResponseEntity<>(fakeResponse, HttpStatus.OK);
-        when(claudeRestTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(String.class)))
-            .thenReturn(mockResp);
-
-        String result = claudeApiClient.rewriteResume(
-            "\\documentclass{article}", "SWE", "Acme Corp", "We need Java developers"
-        );
-
-        assertEquals("\\documentclass{article} TAILORED", result);
-    }
-
-    @Test
-    void rewriteResume_onRestClientException_throwsRuntimeException() {
-        when(claudeRestTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(String.class)))
-            .thenThrow(new RestClientException("Network error"));
-
-        assertThrows(RuntimeException.class, () ->
-            claudeApiClient.rewriteResume("latex", "SWE", "Acme", "jd")
-        );
-    }
-
-    @Test
-    void rewriteResume_onMalformedResponse_throwsRuntimeException() {
-        ResponseEntity<String> mockResp = new ResponseEntity<>("{\"bad\": \"json\"}", HttpStatus.OK);
-        when(claudeRestTemplate.postForEntity(anyString(), any(HttpEntity.class), eq(String.class)))
-            .thenReturn(mockResp);
-
-        assertThrows(RuntimeException.class, () ->
-            claudeApiClient.rewriteResume("latex", "SWE", "Acme", "jd")
-        );
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-mvn test -Dtest=ClaudeApiClientTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — `ClaudeApiClient` class doesn't exist.
-
-- [ ] **Step 3: Create `ClaudeApiClient.java`**
+- [ ] **Step 1: Create `ClaudeApiClient.java`**
 
 Create `src/main/java/com/jobbot/service/ClaudeApiClient.java`:
 
@@ -576,19 +315,18 @@ public class ClaudeApiClient {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Compile to verify**
 
 ```bash
-mvn test -Dtest=ClaudeApiClientTest -q 2>&1 | tail -10
+mvn compile -q 2>&1 | tail -5
 ```
 
-Expected: BUILD SUCCESS, 3 tests passed.
+Expected: BUILD SUCCESS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/main/java/com/jobbot/service/ClaudeApiClient.java \
-        src/test/java/com/jobbot/service/ClaudeApiClientTest.java
+git add src/main/java/com/jobbot/service/ClaudeApiClient.java
 git commit -m "feat: add ClaudeApiClient for Anthropic messages API
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -600,131 +338,8 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Create: `src/main/java/com/jobbot/service/ResumeTailor.java`
-- Test: `src/test/java/com/jobbot/service/ResumeTailorTest.java`
 
-- [ ] **Step 1: Write failing test**
-
-Create `src/test/java/com/jobbot/service/ResumeTailorTest.java`:
-
-```java
-package com.jobbot.service;
-
-import com.jobbot.entity.Job;
-import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
-import com.jobbot.repository.ResumeRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import java.util.Optional;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class ResumeTailorTest {
-
-    @Mock
-    private ClaudeApiClient claudeApiClient;
-
-    @Mock
-    private ResumeRepository resumeRepository;
-
-    @InjectMocks
-    private ResumeTailor resumeTailor;
-
-    private Job job;
-    private Resume baseResume;
-    private UserConfig userConfig;
-
-    @BeforeEach
-    void setup() {
-        userConfig = new UserConfig();
-        userConfig.setEmail("user@test.com");
-
-        baseResume = new Resume();
-        baseResume.setId(1L);
-        baseResume.setLatexContent("\\documentclass{article} BASE");
-        baseResume.setVersionName("base-v1");
-        baseResume.setUserConfig(userConfig);
-
-        job = new Job();
-        job.setId(42L);
-        job.setTitle("Software Engineer");
-        job.setCompany("Acme Corp");
-        job.setJobDescription("We need Java Spring Boot expertise.");
-    }
-
-    @Test
-    void tailorAndSave_returnsPopulatedResume_onSuccess() {
-        String tailoredLatex = "\\documentclass{article} TAILORED";
-        when(claudeApiClient.rewriteResume(anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(tailoredLatex);
-
-        Resume persisted = new Resume();
-        persisted.setId(99L);
-        persisted.setLatexContent(tailoredLatex);
-        persisted.setVersionName("tailored-for-42");
-
-        ArgumentCaptor<Resume> captor = ArgumentCaptor.forClass(Resume.class);
-        when(resumeRepository.save(captor.capture())).thenReturn(persisted);
-
-        Optional<Resume> result = resumeTailor.tailorAndSave(job, baseResume);
-
-        assertTrue(result.isPresent());
-        assertEquals(99L, result.get().getId());
-
-        Resume saved = captor.getValue();
-        assertEquals(tailoredLatex, saved.getLatexContent());
-        assertEquals(1L, saved.getParentResumeId());
-        assertEquals(42L, saved.getJobId());
-        assertEquals("tailored-for-42", saved.getVersionName());
-        assertFalse(saved.getIsActive());
-        assertEquals(userConfig, saved.getUserConfig());
-    }
-
-    @Test
-    void tailorAndSave_onClaudeFailure_returnsEmpty() {
-        when(claudeApiClient.rewriteResume(anyString(), anyString(), anyString(), anyString()))
-            .thenThrow(new RuntimeException("API down"));
-
-        Optional<Resume> result = resumeTailor.tailorAndSave(job, baseResume);
-
-        assertFalse(result.isPresent());
-        verify(resumeRepository, never()).save(any());
-    }
-
-    @Test
-    void tailorAndSave_passesCorrectFieldsToClient() {
-        when(claudeApiClient.rewriteResume(anyString(), anyString(), anyString(), anyString()))
-            .thenReturn("tailored");
-        when(resumeRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-
-        resumeTailor.tailorAndSave(job, baseResume);
-
-        verify(claudeApiClient).rewriteResume(
-            "\\documentclass{article} BASE",
-            "Software Engineer",
-            "Acme Corp",
-            "We need Java Spring Boot expertise."
-        );
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-mvn test -Dtest=ResumeTailorTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — `ResumeTailor` class doesn't exist.
-
-- [ ] **Step 3: Create `ResumeTailor.java`**
+- [ ] **Step 1: Create `ResumeTailor.java`**
 
 Create `src/main/java/com/jobbot/service/ResumeTailor.java`:
 
@@ -787,19 +402,33 @@ public class ResumeTailor {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Update `COMPONENTS.md`**
 
-```bash
-mvn test -Dtest=ResumeTailorTest -q 2>&1 | tail -10
+Find the `ResumeTailor (Phase 2 - NOT YET IMPLEMENTED)` section and replace the planned methods with the actual implementation:
+
+```java
+// Replace planned:
+String generateTailoredResume(Resume baseResume, Job job)
+String generateCoverLetter(Resume baseResume, Job job)
+
+// With actual:
+Optional<Resume> tailorAndSave(Job job, Resume baseResume)
 ```
 
-Expected: BUILD SUCCESS, 3 tests passed.
+Also change `Phase Status:` from `Phase 2 - NOT YET IMPLEMENTED` → `Phase 2 - COMPLETE ✅`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Compile to verify**
 
 ```bash
-git add src/main/java/com/jobbot/service/ResumeTailor.java \
-        src/test/java/com/jobbot/service/ResumeTailorTest.java
+mvn compile -q 2>&1 | tail -5
+```
+
+Expected: BUILD SUCCESS
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main/java/com/jobbot/service/ResumeTailor.java COMPONENTS.md
 git commit -m "feat: add ResumeTailor service with Claude API integration
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -815,148 +444,11 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Create: `src/main/java/com/jobbot/controller/ResumeController.java`
-- Test: `src/test/java/com/jobbot/controller/ResumeControllerTest.java`
 
-- [ ] **Step 1: Write failing test**
+The existing `API_ENDPOINTS.md` documents the endpoint as `POST /api/resumes/tailor?resumeId=1&jobId=5`.
+We use `resumeId` (caller selects which resume) + `jobId` as query params, matching the doc.
 
-Create `src/test/java/com/jobbot/controller/ResumeControllerTest.java`:
-
-```java
-package com.jobbot.controller;
-
-import com.jobbot.entity.Job;
-import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
-import com.jobbot.repository.JobRepository;
-import com.jobbot.repository.ResumeRepository;
-import com.jobbot.repository.UserConfigRepository;
-import com.jobbot.service.ResumeTailor;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import java.util.Map;
-import java.util.Optional;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-
-@ExtendWith(MockitoExtension.class)
-class ResumeControllerTest {
-
-    @Mock
-    private UserConfigRepository userConfigRepository;
-
-    @Mock
-    private ResumeRepository resumeRepository;
-
-    @Mock
-    private JobRepository jobRepository;
-
-    @Mock
-    private ResumeTailor resumeTailor;
-
-    @InjectMocks
-    private ResumeController resumeController;
-
-    @Test
-    void tailorResume_returns200_withBodyFields_onSuccess() {
-        UserConfig config = new UserConfig();
-        config.setId(1L);
-
-        Resume base = new Resume();
-        base.setId(10L);
-
-        Job job = new Job();
-        job.setId(42L);
-
-        Resume tailored = new Resume();
-        tailored.setId(99L);
-        tailored.setVersionName("tailored-for-42");
-        tailored.setLatexContent("TAILORED LATEX");
-
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true)).thenReturn(Optional.of(base));
-        when(jobRepository.findById(42L)).thenReturn(Optional.of(job));
-        when(resumeTailor.tailorAndSave(job, base)).thenReturn(Optional.of(tailored));
-
-        ResponseEntity<?> response = resumeController.tailorResume(Map.of("userId", 1, "jobId", 42));
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        @SuppressWarnings("unchecked")
-        Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals(99L, body.get("resumeId"));
-        assertEquals("tailored-for-42", body.get("versionName"));
-        assertEquals("TAILORED LATEX", body.get("latexContent"));
-    }
-
-    @Test
-    void tailorResume_returns500_whenTailoringFails() {
-        UserConfig config = new UserConfig();
-        Resume base = new Resume();
-        Job job = new Job();
-        job.setId(42L);
-
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true)).thenReturn(Optional.of(base));
-        when(jobRepository.findById(42L)).thenReturn(Optional.of(job));
-        when(resumeTailor.tailorAndSave(job, base)).thenReturn(Optional.empty());
-
-        ResponseEntity<?> response = resumeController.tailorResume(Map.of("userId", 1, "jobId", 42));
-
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-    }
-
-    @Test
-    void tailorResume_returns400_whenUserNotFound() {
-        when(userConfigRepository.findById(anyLong())).thenReturn(Optional.empty());
-
-        ResponseEntity<?> response = resumeController.tailorResume(Map.of("userId", 99, "jobId", 1));
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        verify(resumeTailor, never()).tailorAndSave(any(), any());
-    }
-
-    @Test
-    void tailorResume_returns400_whenNoActiveResume() {
-        UserConfig config = new UserConfig();
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true)).thenReturn(Optional.empty());
-
-        ResponseEntity<?> response = resumeController.tailorResume(Map.of("userId", 1, "jobId", 42));
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        verify(resumeTailor, never()).tailorAndSave(any(), any());
-    }
-
-    @Test
-    void tailorResume_returns400_whenJobNotFound() {
-        UserConfig config = new UserConfig();
-        Resume base = new Resume();
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true)).thenReturn(Optional.of(base));
-        when(jobRepository.findById(42L)).thenReturn(Optional.empty());
-
-        ResponseEntity<?> response = resumeController.tailorResume(Map.of("userId", 1, "jobId", 42));
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        verify(resumeTailor, never()).tailorAndSave(any(), any());
-    }
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-```bash
-mvn test -Dtest=ResumeControllerTest -q 2>&1 | tail -20
-```
-
-Expected: FAIL — `ResumeController` class doesn't exist.
-
-- [ ] **Step 3: Create `ResumeController.java`**
+- [ ] **Step 1: Create `ResumeController.java`**
 
 Create `src/main/java/com/jobbot/controller/ResumeController.java`:
 
@@ -965,10 +457,8 @@ package com.jobbot.controller;
 
 import com.jobbot.entity.Job;
 import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
 import com.jobbot.repository.JobRepository;
 import com.jobbot.repository.ResumeRepository;
-import com.jobbot.repository.UserConfigRepository;
 import com.jobbot.service.ResumeTailor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -980,12 +470,10 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/resumes")
+@CrossOrigin(origins = "*")
 public class ResumeController {
 
     private static final Logger logger = LoggerFactory.getLogger(ResumeController.class);
-
-    @Autowired
-    private UserConfigRepository userConfigRepository;
 
     @Autowired
     private ResumeRepository resumeRepository;
@@ -997,18 +485,13 @@ public class ResumeController {
     private ResumeTailor resumeTailor;
 
     @PostMapping("/tailor")
-    public ResponseEntity<?> tailorResume(@RequestBody Map<String, Object> body) {
-        Long userId = Long.valueOf(body.get("userId").toString());
-        Long jobId = Long.valueOf(body.get("jobId").toString());
+    public ResponseEntity<?> tailorResume(
+            @RequestParam Long resumeId,
+            @RequestParam Long jobId) {
 
-        Optional<UserConfig> configOpt = userConfigRepository.findById(userId);
-        if (configOpt.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "User not found: " + userId));
-        }
-
-        Optional<Resume> baseResumeOpt = resumeRepository.findFirstByUserConfigAndIsActive(configOpt.get(), true);
+        Optional<Resume> baseResumeOpt = resumeRepository.findById(resumeId);
         if (baseResumeOpt.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "No active base resume found for user " + userId));
+            return ResponseEntity.badRequest().body(Map.of("error", "Resume not found: " + resumeId));
         }
 
         Optional<Job> jobOpt = jobRepository.findById(jobId);
@@ -1031,19 +514,46 @@ public class ResumeController {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 2: Update `API_ENDPOINTS.md`**
 
-```bash
-mvn test -Dtest=ResumeControllerTest -q 2>&1 | tail -10
+Find the Phase 2+ tailor resume placeholder entry:
+```
+POST /api/resumes/tailor?resumeId=1&jobId=5
+  → Returns tailored LaTeX + PDF + cover letter
 ```
 
-Expected: BUILD SUCCESS, 5 tests passed.
+Replace with the full documented endpoint matching the implementation:
+```
+POST /api/resumes/tailor?resumeId=1&jobId=5
+  → Tailors the specified resume for the given job using Claude API
+  → Stores result as a new resume version (isActive=false)
 
-- [ ] **Step 5: Commit**
+Response 200:
+{
+  "resumeId": 99,
+  "versionName": "tailored-for-5",
+  "latexContent": "\\documentclass{article}..."
+}
+
+Response 400: { "error": "Resume not found: 1" }
+Response 500: { "error": "Tailoring failed — check logs" }
+```
+
+Also move it from `Phase 2+ APIs (Not Yet Implemented)` section into the main API list.
+
+- [ ] **Step 3: Compile to verify**
+
+```bash
+mvn compile -q 2>&1 | tail -5
+```
+
+Expected: BUILD SUCCESS
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/main/java/com/jobbot/controller/ResumeController.java \
-        src/test/java/com/jobbot/controller/ResumeControllerTest.java
+        API_ENDPOINTS.md
 git commit -m "feat: add ResumeController with POST /api/resumes/tailor endpoint
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -1055,260 +565,133 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 **Files:**
 - Modify: `src/main/java/com/jobbot/service/SchedulerService.java`
-- Test: `src/test/java/com/jobbot/service/SchedulerServiceTest.java`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Add `ResumeTailor` and `ResumeRepository` dependencies**
 
-Create `src/test/java/com/jobbot/service/SchedulerServiceTest.java`:
+Add to the `@Autowired` fields block in `SchedulerService`:
 
 ```java
-package com.jobbot.service;
+@Autowired
+private ResumeRepository resumeRepository;
 
-import com.jobbot.entity.Job;
+@Autowired
+private ResumeTailor resumeTailor;
+```
+
+Add the missing import at the top:
+```java
 import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
-import com.jobbot.repository.JobRepository;
 import com.jobbot.repository.ResumeRepository;
-import com.jobbot.repository.UserConfigRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import java.util.List;
-import java.util.Map;
+import com.jobbot.service.ResumeTailor;
 import java.util.Optional;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+```
 
-@ExtendWith(MockitoExtension.class)
-class SchedulerServiceTest {
+- [ ] **Step 2: Add tailoring loop after `jobRepository.saveAll`**
 
-    @Mock
-    private LinkedInJobFetcher jobFetcher;
+In `executeRun`, after `matchedJobs.forEach(jobRepository::save);`, add:
 
-    @Mock
-    private JobMatcher jobMatcher;
+```java
+Optional<Resume> activeResume = resumeRepository.findFirstByUserConfigAndIsActive(config, true);
 
-    @Mock
-    private JobRepository jobRepository;
-
-    @Mock
-    private UserConfigRepository userConfigRepository;
-
-    @Mock
-    private ResumeRepository resumeRepository;
-
-    @Mock
-    private ResumeTailor resumeTailor;
-
-    @InjectMocks
-    private SchedulerService schedulerService;
-
-    private UserConfig config;
-    private Resume baseResume;
-    private Job matchedJob;
-
-    @BeforeEach
-    void setup() {
-        config = new UserConfig();
-        config.setJobKeywords("Java");
-        config.setYearsExperienceMax(3);
-        config.setLocation("Bangalore");
-
-        baseResume = new Resume();
-        baseResume.setId(1L);
-
-        matchedJob = new Job();
-        matchedJob.setId(10L);
-        matchedJob.setTitle("SWE");
+int tailoringErrors = 0;
+if (activeResume.isPresent()) {
+    for (Job job : matchedJobs) {
+        Optional<Resume> tailored = resumeTailor.tailorAndSave(job, activeResume.get());
+        if (tailored.isEmpty()) tailoringErrors++;
     }
-
-    @Test
-    void executeRun_tailorsResumeForEachMatchedJob() {
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(jobFetcher.searchJobs(any(), anyString(), anyInt(), anyString()))
-            .thenReturn(List.of(matchedJob));
-        when(jobMatcher.filterJobs(any(), any())).thenReturn(List.of(matchedJob));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true))
-            .thenReturn(Optional.of(baseResume));
-        when(resumeTailor.tailorAndSave(matchedJob, baseResume)).thenReturn(Optional.of(new Resume()));
-
-        Map<String, Object> result = schedulerService.executeRun(1L);
-
-        assertEquals("success", result.get("status"));
-        assertEquals(1, result.get("jobsMatched"));
-        assertEquals(0, result.get("tailoringErrors"));
-        verify(resumeTailor).tailorAndSave(matchedJob, baseResume);
-    }
-
-    @Test
-    void executeRun_whenNoActiveResume_skipsAllTailoring() {
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(jobFetcher.searchJobs(any(), anyString(), anyInt(), anyString()))
-            .thenReturn(List.of(matchedJob));
-        when(jobMatcher.filterJobs(any(), any())).thenReturn(List.of(matchedJob));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true))
-            .thenReturn(Optional.empty());
-
-        Map<String, Object> result = schedulerService.executeRun(1L);
-
-        assertEquals("success", result.get("status"));
-        verify(resumeTailor, never()).tailorAndSave(any(), any());
-    }
-
-    @Test
-    void executeRun_tailoringFailure_incrementsErrorCount() {
-        when(userConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(jobFetcher.searchJobs(any(), anyString(), anyInt(), anyString()))
-            .thenReturn(List.of(matchedJob));
-        when(jobMatcher.filterJobs(any(), any())).thenReturn(List.of(matchedJob));
-        when(resumeRepository.findFirstByUserConfigAndIsActive(config, true))
-            .thenReturn(Optional.of(baseResume));
-        when(resumeTailor.tailorAndSave(matchedJob, baseResume)).thenReturn(Optional.empty());
-
-        Map<String, Object> result = schedulerService.executeRun(1L);
-
-        assertEquals("success", result.get("status"));
-        assertEquals(1, result.get("tailoringErrors"));
-    }
-
-    @Test
-    void executeRun_whenUserNotFound_returnsFailure() {
-        when(userConfigRepository.findById(99L)).thenReturn(Optional.empty());
-
-        Map<String, Object> result = schedulerService.executeRun(99L);
-
-        assertEquals("failed", result.get("status"));
-        verify(resumeTailor, never()).tailorAndSave(any(), any());
-    }
+} else {
+    logger.warn("No active base resume for user {} — skipping tailoring", userId);
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Add `tailoringErrors` to the result map**
 
-```bash
-mvn test -Dtest=SchedulerServiceTest -q 2>&1 | tail -20
+In the result section, add:
+```java
+result.put("tailoringErrors", tailoringErrors);
 ```
 
-Expected: FAIL — `SchedulerService` has no `ResumeTailor` or `ResumeRepository` dependency.
-
-- [ ] **Step 3: Update `SchedulerService.java`**
-
-Replace the full contents of `src/main/java/com/jobbot/service/SchedulerService.java`:
+The full updated `executeRun` method should look like:
 
 ```java
-package com.jobbot.service;
+public Map<String, Object> executeRun(Long userId) {
+    Map<String, Object> result = new HashMap<>();
 
-import com.jobbot.entity.Job;
-import com.jobbot.entity.Resume;
-import com.jobbot.entity.UserConfig;
-import com.jobbot.repository.JobRepository;
-import com.jobbot.repository.ResumeRepository;
-import com.jobbot.repository.UserConfigRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+    try {
+        UserConfig config = userConfigRepository.findById(userId)
+            .orElseThrow(() -> new RuntimeException("User config not found"));
 
-@Service
-public class SchedulerService {
+        logger.info("Starting job search for user: {}", userId);
 
-    private static final Logger logger = LoggerFactory.getLogger(SchedulerService.class);
+        List<Job> fetchedJobs = jobFetcher.searchJobs(
+            config, config.getJobKeywords(), config.getYearsExperienceMax(), config.getLocation()
+        );
 
-    @Autowired
-    private LinkedInJobFetcher jobFetcher;
+        List<Job> matchedJobs = jobMatcher.filterJobs(fetchedJobs, config);
+        matchedJobs.forEach(jobRepository::save);
 
-    @Autowired
-    private JobMatcher jobMatcher;
+        Optional<Resume> activeResume = resumeRepository.findFirstByUserConfigAndIsActive(config, true);
 
-    @Autowired
-    private JobRepository jobRepository;
-
-    @Autowired
-    private UserConfigRepository userConfigRepository;
-
-    @Autowired
-    private ResumeRepository resumeRepository;
-
-    @Autowired
-    private ResumeTailor resumeTailor;
-
-    public Map<String, Object> executeRun(Long userId) {
-        Map<String, Object> result = new HashMap<>();
-
-        try {
-            UserConfig config = userConfigRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User config not found"));
-
-            logger.info("Starting job search for user: {}", userId);
-
-            List<Job> fetchedJobs = jobFetcher.searchJobs(
-                config, config.getJobKeywords(), config.getYearsExperienceMax(), config.getLocation()
-            );
-
-            List<Job> matchedJobs = jobMatcher.filterJobs(fetchedJobs, config);
-            matchedJobs.forEach(jobRepository::save);
-
-            Optional<Resume> activeResume = resumeRepository.findFirstByUserConfigAndIsActive(config, true);
-
-            int tailoringErrors = 0;
-            if (activeResume.isPresent()) {
-                for (Job job : matchedJobs) {
-                    Optional<Resume> tailored = resumeTailor.tailorAndSave(job, activeResume.get());
-                    if (tailored.isEmpty()) tailoringErrors++;
-                }
-            } else {
-                logger.warn("No active base resume for user {} — skipping tailoring", userId);
+        int tailoringErrors = 0;
+        if (activeResume.isPresent()) {
+            for (Job job : matchedJobs) {
+                Optional<Resume> tailored = resumeTailor.tailorAndSave(job, activeResume.get());
+                if (tailored.isEmpty()) tailoringErrors++;
             }
-
-            result.put("status", "success");
-            result.put("jobsFetched", fetchedJobs.size());
-            result.put("jobsMatched", matchedJobs.size());
-            result.put("applicationsSubmitted", 0);
-            result.put("tailoringErrors", tailoringErrors);
-
-            logger.info("Run completed for user {}. Matched {} jobs, {} tailoring errors",
-                userId, matchedJobs.size(), tailoringErrors);
-
-        } catch (Exception e) {
-            logger.error("Error executing bot run", e);
-            result.put("status", "failed");
-            result.put("error", e.getMessage());
+        } else {
+            logger.warn("No active base resume for user {} — skipping tailoring", userId);
         }
 
-        return result;
+        result.put("status", "success");
+        result.put("jobsFetched", fetchedJobs.size());
+        result.put("jobsMatched", matchedJobs.size());
+        result.put("applicationsSubmitted", 0);
+        result.put("tailoringErrors", tailoringErrors);
+
+        logger.info("Run completed for user {}. Matched {} jobs, {} tailoring errors",
+            userId, matchedJobs.size(), tailoringErrors);
+
+    } catch (Exception e) {
+        logger.error("Error executing bot run", e);
+        result.put("status", "failed");
+        result.put("error", e.getMessage());
     }
+
+    return result;
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Update `COMPONENTS.md` and `CONTEXT_FOR_FUTURE_SESSIONS.md`**
 
-```bash
-mvn test -Dtest=SchedulerServiceTest -q 2>&1 | tail -10
+In `COMPONENTS.md`, find the `SchedulerService` Dependencies section and change:
+```
+- ResumeTailor (Phase 3)
+```
+to:
+```
+- ResumeTailor (Phase 2) ✅
 ```
 
-Expected: BUILD SUCCESS, 4 tests passed.
-
-- [ ] **Step 5: Run all tests to check nothing is broken**
-
-```bash
-mvn test -q 2>&1 | tail -20
+In `CONTEXT_FOR_FUTURE_SESSIONS.md`, update the Phase status:
+```
+| Phase Status | Phase 1 ✅ / Phase 2 ✅ / Phase 3-5 ⏳ |
 ```
 
-Expected: BUILD SUCCESS, all tests pass.
+And move `ResumeTailor` from the "What's NOT Implemented" section to "What's Implemented".
+
+- [ ] **Step 5: Compile to verify**
+
+```bash
+mvn compile -q 2>&1 | tail -5
+```
+
+Expected: BUILD SUCCESS
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/main/java/com/jobbot/service/SchedulerService.java \
-        src/test/java/com/jobbot/service/SchedulerServiceTest.java
+        COMPONENTS.md CONTEXT_FOR_FUTURE_SESSIONS.md
 git commit -m "feat: integrate ResumeTailor into SchedulerService pipeline
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -1316,51 +699,36 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 ---
 
-### Task 8: Final verification
+### Task 8: Final verification and docs commit
 
-- [ ] **Step 1: Compile the full project**
-
-```bash
-mvn clean compile -q 2>&1 | tail -10
-```
-
-Expected: BUILD SUCCESS with no warnings about missing beans.
-
-- [ ] **Step 2: Run all tests**
+- [ ] **Step 1: Full project compile**
 
 ```bash
-mvn test 2>&1 | grep -E "(Tests run|BUILD|FAIL|ERROR)" | tail -20
+mvn clean compile 2>&1 | grep -E "(BUILD|ERROR)" | tail -5
 ```
 
-Expected: All test classes pass, BUILD SUCCESS.
+Expected: `BUILD SUCCESS`
 
-- [ ] **Step 3: Verify new files exist**
+- [ ] **Step 2: Verify all new files exist**
 
 ```bash
-find src -name "*.java" | sort
+find src/main -name "*.java" | sort
 ```
 
-Expected output includes:
+Expected output includes these new files:
 ```
 src/main/java/com/jobbot/config/ClaudeApiConfig.java
 src/main/java/com/jobbot/controller/ResumeController.java
 src/main/java/com/jobbot/service/ClaudeApiClient.java
 src/main/java/com/jobbot/service/ResumeTailor.java
-src/test/java/com/jobbot/config/ClaudeApiConfigTest.java
-src/test/java/com/jobbot/controller/ResumeControllerTest.java
-src/test/java/com/jobbot/entity/ResumeEntityTest.java
-src/test/java/com/jobbot/repository/ResumeRepositoryTest.java
-src/test/java/com/jobbot/service/ClaudeApiClientTest.java
-src/test/java/com/jobbot/service/ResumeTailorTest.java
-src/test/java/com/jobbot/service/SchedulerServiceTest.java
 ```
 
-- [ ] **Step 4: Final commit with updated docs**
+- [ ] **Step 3: Commit updated plan and spec docs**
 
 ```bash
 git add docs/superpowers/specs/2026-05-06-phase2-resume-tailoring-design.md \
         docs/superpowers/plans/2026-05-06-phase2-resume-tailoring.md
-git commit -m "docs: add Phase 2 resume tailoring spec and implementation plan
+git commit -m "docs: update Phase 2 plan (no tests, aligned API endpoints)
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
